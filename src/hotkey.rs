@@ -40,7 +40,7 @@ pub fn parse_hotkey(binding: Option<&str>) -> Result<Option<HotKey>> {
 
 fn expand_hyper(binding: &str) -> String {
     let mut tokens = Vec::new();
-    for token in binding.split(|c| c == '+' || c == '-') {
+    for token in binding.split('+') {
         let token = token.trim();
         if token.eq_ignore_ascii_case("hyper") {
             tokens.extend(["shift", "control", "alt", "super"]);
