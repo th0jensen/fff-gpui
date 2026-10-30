@@ -43,7 +43,7 @@ fn expand_hyper(binding: &str) -> String {
     for token in binding.split(|c| c == '+' || c == '-') {
         let token = token.trim();
         if token.eq_ignore_ascii_case("hyper") {
-            tokens.extend(["shift", "control", "alt", "super"]);
+            tokens.extend(["control", "alt", "super"]);
         } else if !token.is_empty() {
             tokens.push(token);
         }
@@ -57,7 +57,7 @@ mod tests {
 
     #[test]
     fn expands_hyper_into_all_modifiers() {
-        assert_eq!(expand_hyper("hyper+f"), "shift+control+alt+super+f");
-        assert_eq!(expand_hyper("cmd-hyper-f"), "cmd+shift+control+alt+super+f");
+        assert_eq!(expand_hyper("hyper+f"), "control+alt+super+f");
+        assert_eq!(expand_hyper("cmd-hyper-f"), "cmd+control+alt+super+f");
     }
 }
