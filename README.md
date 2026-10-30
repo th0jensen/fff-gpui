@@ -243,6 +243,10 @@ This is the recommended way to use fff-gpui within a project. Add the following 
 This opens fff-gpui scoped to the current project root. `cmd-k cmd-p` launches in file-search mode, `cmd-k cmd-f` launches directly in grep mode. Selected files open in Zed; with grep, the editor jumps to the matched line.
 </details>
 
+## Known integrations
+
+- [vscode-fff-gpui](https://github.com/jellydn/vscode-fff-gpui) — native VS Code extension integrating fff-gpui over its Unix socket (fuzzy file search, live grep, Tree-sitter preview, git-aware indexing).
+
 ## License
 
 MIT
