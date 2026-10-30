@@ -456,7 +456,12 @@ fn active_display_bounds() -> Option<Bounds<Pixels>> {
 }
 
 // Open the main picker window centered on the active display.
-fn open_window(session: PickerSession, runtime_config: &Arc<Mutex<RuntimeConfig>>, cx: &mut App) {
+fn open_window(
+    session: PickerSession,
+    initial_query: Option<String>,
+    runtime_config: &Arc<Mutex<RuntimeConfig>>,
+    cx: &mut App,
+) {
     let (config, changed) = refresh_runtime_config(runtime_config);
     if changed {
         let _ = apply_key_bindings(cx, &config, true);
@@ -503,6 +508,7 @@ fn open_window(session: PickerSession, runtime_config: &Arc<Mutex<RuntimeConfig>
                     shared.clone(),
                     enable_content_indexing,
                     start_in_grep,
+                    initial_query.clone().unwrap_or_default(),
                     excluded_dirs.clone(),
                     print_stdout,
                     editor.clone(),
@@ -548,7 +554,7 @@ fn toggle_picker(
         session.start_in_grep = false;
         session.responder = None;
         info!(base_path = %session.base_path.display(), "opening picker window");
-        open_window(session, runtime_config, cx);
+        open_window(session, None, runtime_config, cx);
     } else {
         info!("closing picker window(s)");
         close_all_windows(cx);
@@ -603,7 +609,11 @@ fn handle_service_command(
             debug!("received toggle-window service command");
             toggle_picker(session, runtime_config, cx)
         }
-        ServiceCommand::OpenPath { path, in_grep } => {
+        ServiceCommand::OpenPath {
+            path,
+            in_grep,
+            query,
+        } => {
             debug!(path = %path.display(), in_grep, "received open-path service command");
             let (should_replace, session_snapshot) = match session.lock() {
                 Ok(mut current) => {
@@ -625,10 +635,10 @@ fn handle_service_command(
             };
 
             if cx.windows().is_empty() {
-                open_window(session_snapshot, runtime_config, cx);
-            } else if should_replace {
+                open_window(session_snapshot, query, runtime_config, cx);
+            } else if should_replace || query.is_some() {
                 close_all_windows(cx);
-                open_window(session_snapshot, runtime_config, cx);
+                open_window(session_snapshot, query, runtime_config, cx);
             }
         }
         ServiceCommand::OpenOneShot { path, in_grep } => {
@@ -639,6 +649,7 @@ fn handle_service_command(
                 .unwrap_or(false);
             open_window(
                 one_shot_session(path, one_shot_sessions, in_grep, print_stdout, responder),
+                None,
                 runtime_config,
                 cx,
             );
@@ -756,6 +767,7 @@ fn main() {
             None => ServiceCommand::OpenPath {
                 path: base_path.clone(),
                 in_grep: launch.start_in_grep,
+                query: None,
             },
         };
 
@@ -845,6 +857,7 @@ fn main() {
                     launch.print_stdout,
                     None,
                 ),
+                None,
                 &runtime_config,
                 cx,
             );
@@ -858,6 +871,7 @@ fn main() {
                     launch.print_stdout,
                     None,
                 ),
+                None,
                 &runtime_config,
                 cx,
             );

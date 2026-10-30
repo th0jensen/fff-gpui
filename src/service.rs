@@ -21,6 +21,8 @@ pub enum ServiceCommand {
         path: PathBuf,
         #[serde(default)]
         in_grep: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        query: Option<String>,
     },
     OpenOneShot {
         path: PathBuf,
@@ -216,8 +218,10 @@ mod tests {
         let cmd = ServiceCommand::OpenPath {
             path: PathBuf::from("/home/u/proj"),
             in_grep: false,
+            query: None,
         };
         let s = serde_json::to_string(&cmd).unwrap();
+        assert!(!s.contains("query"));
         let back: ServiceCommand = serde_json::from_str(&s).unwrap();
         assert!(matches!(
             back,
@@ -243,11 +247,41 @@ mod tests {
         let s = r#"{"cmd":"open_path","path":"/x"}"#;
         let cmd: ServiceCommand = serde_json::from_str(s).unwrap();
         match cmd {
-            ServiceCommand::OpenPath { path, in_grep } => {
+            ServiceCommand::OpenPath {
+                path,
+                in_grep,
+                query,
+            } => {
                 assert_eq!(path, PathBuf::from("/x"));
                 assert!(!in_grep);
+                assert!(query.is_none());
             }
             other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_path_preserves_query() {
+        for (in_grep, query) in [
+            (false, "**/*.{ts,tsx} git:modified"),
+            (true, "TODO|FIXME"),
+            (false, ""),
+            (true, " café \"quoted\" \\path\nnext "),
+        ] {
+            let request = serde_json::json!({
+                "cmd": "open_path",
+                "path": "/project",
+                "in_grep": in_grep,
+                "query": query,
+            });
+            let command = read_request(&format!("{request}\n")).unwrap();
+            let mut wire = Vec::new();
+            write_request(&mut wire, &command).unwrap();
+            let wire = String::from_utf8(wire).unwrap();
+            assert_eq!(wire.lines().count(), 1);
+            let actual: serde_json::Value = serde_json::from_str(&wire).unwrap();
+            assert_eq!(actual, request);
         }
     }
 

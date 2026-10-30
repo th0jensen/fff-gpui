@@ -480,13 +480,18 @@ impl FffPicker {
         shared: PickerSharedState,
         enable_content_indexing: bool,
         start_in_grep: bool,
+        initial_query: String,
         excluded_dirs: Vec<PathBuf>,
         print_stdout: bool,
         editor: String,
         responder: Option<ResponderArc>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let text_field = cx.new(|cx| TextField::new("Search files...", cx));
+        let text_field = cx.new(|cx| {
+            let mut field = TextField::new("Search files...", cx);
+            field.set_text(initial_query.clone(), cx);
+            field
+        });
 
         cx.observe(&text_field, |this, _entity, cx| {
             let new_query = this.text_field.read(cx).text();
@@ -513,7 +518,7 @@ impl FffPicker {
             excluded_dirs,
             print_stdout,
             grep_mode: GrepMode::PlainText,
-            query: String::new(),
+            query: initial_query,
             results: Arc::new(Vec::new()),
             total_files: 0,
             total_matched: 0,

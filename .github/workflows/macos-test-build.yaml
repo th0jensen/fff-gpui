@@ -1,0 +1,110 @@
+name: macOS Test Build
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-test-build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Test and build (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            arch: arm64
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            arch: x86_64
+    env:
+      CARGO_TERM_COLOR: always
+      TARGET: ${{ matrix.target }}
+      ARCH: ${{ matrix.arch }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.event_name != 'pull_request' }}
+      - name: Test
+        run: cargo test --locked --release --target "$TARGET"
+      - name: Build release binary
+        run: cargo build --locked --release --target "$TARGET"
+      - name: Sign and verify binary
+        run: |
+          binary="target/$TARGET/release/fff-gpui"
+          codesign --force --sign - "$binary"
+          codesign --verify --strict --verbose=2 "$binary"
+          lipo "$binary" -verify_arch "$ARCH"
+      - name: Package test build
+        id: package
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          label="pr-${PR_NUMBER}"
+          if [[ -z "$PR_NUMBER" ]]; then
+            label="manual-${GITHUB_RUN_NUMBER}"
+          fi
+          name="fff-gpui-macos-${ARCH}-${label}-${GITHUB_SHA::7}"
+          mkdir -p dist/package
+          cp "target/$TARGET/release/fff-gpui" dist/package/fff-gpui
+          printf 'Tested commit: %s\nTarget: %s\nRun: %s/%s/actions/runs/%s\n' \
+            "$GITHUB_SHA" "$TARGET" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" \
+            "$GITHUB_RUN_ID" > dist/package/BUILD.txt
+          tar -czf "dist/$name.tar.gz" -C dist/package fff-gpui BUILD.txt
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+      - name: Verify extracted package
+        run: |
+          mkdir -p dist/check
+          tar -xzf dist/*.tar.gz -C dist/check
+          test -x dist/check/fff-gpui
+          codesign --verify --strict --verbose=2 dist/check/fff-gpui
+          dist/check/fff-gpui --version
+      - name: Upload test build
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+      - name: Add testing instructions
+        env:
+          ARTIFACT_NAME: ${{ steps.package.outputs.name }}
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## Test fff-gpui ($ARCH)
+
+          1. Download [${ARTIFACT_NAME}](${ARTIFACT_URL}) and unzip the Actions download.
+          2. Extract the binary: \`tar -xzf ${ARTIFACT_NAME}.tar.gz\`.
+          3. Stop any existing fff-gpui daemon first (Homebrew: \`brew services stop fff-gpui\`).
+          4. Run \`./fff-gpui --version\`, then \`./fff-gpui --open /path/to/project\`.
+          5. For socket testing, run \`./fff-gpui\` as the daemon and use the README's Unix socket examples.
+
+          Built from \`${GITHUB_SHA}\` (the merge commit on PR runs); provenance is in BUILD.txt.
+          This is an ad-hoc signed, unnotarized test build, not a release.
+          If macOS blocks it, review the build's source before using **System Settings → Privacy & Security → Open Anyway**.
+          Artifacts expire after seven days. Restore your normal daemon after testing.
+          EOF

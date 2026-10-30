@@ -55,6 +55,35 @@ cargo build --release
 The binary will be at `target/release/fff-gpui`. You can move it anywhere on your `$PATH` or reference it directly in your config.
 
 Having trouble building? Check Zed's [macOS troubleshooting guide](https://zed.dev/docs/development/macos#troubleshooting) — the build requirements are the same.
+
+### Test a pull request build
+
+Pull requests run **macOS Test Build**, which tests and builds release binaries
+for Apple Silicon (`arm64`) and Intel (`x86_64`). Open the workflow run from the
+PR's checks and download the artifact for your Mac. Artifacts expire after seven
+days and require a GitHub login to download. The workflow also supports manual
+runs from the Actions tab once it is on the default branch.
+
+Unzip the Actions download, then extract its `.tar.gz` archive. The archive
+preserves executable permissions and includes `BUILD.txt` with the tested commit,
+target, and workflow run. PR builds test the merge commit, not just the branch tip.
+
+```sh
+tar -xzf fff-gpui-macos-*.tar.gz
+./fff-gpui --version
+./fff-gpui --open /path/to/project
+```
+
+Stop any existing fff-gpui daemon before testing so requests do not go to the
+installed version. For Homebrew, use `brew services stop fff-gpui`. To test the
+[Unix socket integration](#unix-socket-integrations), run `./fff-gpui` without
+`--open` to start the test daemon, then send the documented requests. Quit the
+test daemon and restore your normal service when finished.
+
+These builds are ad-hoc signed, but not notarized. If macOS blocks the binary,
+review the PR's source before using **System Settings → Privacy & Security →
+Open Anyway**. Test builds do not publish a release or replace your installed
+binary.
 </details>
 
 <details>
@@ -131,6 +160,31 @@ fff-gpui --open <path>
 ```
 
 The daemon has a memory footprint of ~150mb idle and ~400mb when actively searching. Most of the reported usage in tools like btop is macOS page reservation and will be reclaimed under memory pressure. Report issues if you experience sustained growth beyond these baselines.
+
+### Unix socket integrations
+
+The daemon accepts newline-delimited JSON at
+`~/.local/state/fff-gpui/fff-gpui.sock`. Use `open_path` to open a directory.
+The optional `query` string pre-fills the search bar and starts the search when
+the file index is ready:
+
+```json
+{"cmd":"open_path","path":"/my/project","in_grep":false,"query":"**/*.{ts,tsx} git:modified"}
+```
+
+```json
+{"cmd":"open_path","path":"/my/project","in_grep":true,"query":"TODO"}
+```
+
+`in_grep` defaults to `false`. Grep opens in plain-text mode; `query` does not
+change the grep matching mode. If `query` is absent, the existing behavior is
+unchanged: a new window starts with an empty search bar. An explicit empty
+string clears the initial query. A request with `query` replaces an existing
+picker window even when it targets the same directory. The query applies only
+to that request, not to later launches from the global keybind.
+
+Keep the connection open to receive the existing `PickResponse` JSON line when
+the user selects a result or dismisses the picker.
 </details>
 
 <details>
