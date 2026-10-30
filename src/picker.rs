@@ -679,6 +679,7 @@ impl FffPicker {
                             enable_content_indexing,
                             mode: FFFMode::Neovim,
                             watch: false,
+                            enable_home_dir_scanning: true,
                             ..Default::default()
                         },
                     ) {
