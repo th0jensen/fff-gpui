@@ -553,14 +553,18 @@ impl FffPicker {
 
     // Close the popup when the window loses focus, matching Raycast-style dismissal.
     pub fn install_focus_lost_dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.dismiss_on_window_blur = Some(cx.observe_window_activation(window, |_this, window, _cx| {
-            if !window.is_window_active() {
-                window.remove_window();
-            }
-        }));
-        self.dismiss_on_blur = Some(cx.on_blur(&self.focus_handle, window, |_this, window, _cx| {
-            window.remove_window();
-        }));
+        self.dismiss_on_window_blur =
+            Some(cx.observe_window_activation(window, |_this, window, _cx| {
+                if !window.is_window_active() {
+                    window.remove_window();
+                }
+            }));
+        self.dismiss_on_blur =
+            Some(
+                cx.on_blur(&self.focus_handle, window, |_this, window, _cx| {
+                    window.remove_window();
+                }),
+            );
     }
 
     // Start the file indexer and trigger the initial search when indexing is ready.
@@ -679,6 +683,7 @@ impl FffPicker {
                             enable_content_indexing,
                             mode: FFFMode::Neovim,
                             watch: false,
+                            enable_home_dir_scanning: true,
                             ..Default::default()
                         },
                     ) {
@@ -1729,8 +1734,11 @@ impl Render for FffPicker {
                                                                         theme.icon_muted,
                                                                     ))
                                                                     .when(content_match.is_some(), |d| {
-                                                                        let (text, ranges) =
-                                                                            content_match.as_ref().unwrap();
+                                                                        let Some((text, ranges)) =
+                                                                            content_match.as_ref()
+                                                                        else {
+                                                                            return d;
+                                                                        };
                                                                         d.child(
                                                                             div()
                                                                                 .text_color(rgb(

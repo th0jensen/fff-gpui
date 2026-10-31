@@ -405,7 +405,12 @@ fn open_config_file(runtime: &Arc<Mutex<RuntimeConfig>>) {
         return;
     }
 
-    match editor::open_in_editor(&path, None, &config.editor, editor::EditorLaunchMode::Detached) {
+    match editor::open_in_editor(
+        &path,
+        None,
+        &config.editor,
+        editor::EditorLaunchMode::Detached,
+    ) {
         Ok(child) => {
             info!(pid = child.id(), path = %path.display(), "opened config file");
         }

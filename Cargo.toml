@@ -44,8 +44,13 @@ indoc = "2.0.7"
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.26"
 
-[profile.dev.package."*"]
-opt-level = 3
+[lints.clippy]
+unwrap_used = "deny"
+panic = "deny"
+dbg_macro = "deny"
+todo = "warn"
+unused_must_use = "deny"
+
 
 [profile.dev]
 opt-level = 1
