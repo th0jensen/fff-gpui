@@ -218,7 +218,7 @@ fn push_text(lines: &mut Vec<HighlightedLine>, mut text: &str, style: theme::Syn
                 let (head, tail) = text.split_at(idx);
                 let head = head.strip_suffix('\r').unwrap_or(head);
                 append_span(
-                    lines.last_mut().unwrap_or_else(|| std::process::exit(1)),
+                    lines.last_mut().expect("at least one line exists"),
                     style.color,
                     style.italic,
                     style.bold,
@@ -232,7 +232,7 @@ fn push_text(lines: &mut Vec<HighlightedLine>, mut text: &str, style: theme::Syn
             None => {
                 let text = text.strip_suffix('\r').unwrap_or(text);
                 append_span(
-                    lines.last_mut().unwrap_or_else(|| std::process::exit(1)),
+                    lines.last_mut().expect("at least one line exists"),
                     style.color,
                     style.italic,
                     style.bold,

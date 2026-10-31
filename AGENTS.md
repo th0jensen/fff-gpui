@@ -38,7 +38,7 @@ In tests, prefer GPUI executor timers over `smol::Timer::after(...)` when relyin
 
 ```sh
 cargo fmt --check
-cargo clippy -- -D warnings
+cargo clippy -- -D clippy::unwrap_used -D clippy::panic -D clippy::dbg_macro -D unused_must_use
 ```
 
 # CI

@@ -405,7 +405,12 @@ fn open_config_file(runtime: &Arc<Mutex<RuntimeConfig>>) {
         return;
     }
 
-    match editor::open_in_editor(&path, None, &config.editor, editor::EditorLaunchMode::Detached) {
+    match editor::open_in_editor(
+        &path,
+        None,
+        &config.editor,
+        editor::EditorLaunchMode::Detached,
+    ) {
         Ok(child) => {
             info!(pid = child.id(), path = %path.display(), "opened config file");
         }
@@ -524,7 +529,7 @@ fn open_window(
             view
         },
     )
-    .unwrap_or_else(|err| std::process::exit(1));
+    .expect("failed to open fff window");
 }
 
 fn close_all_windows(cx: &mut App) {
@@ -772,7 +777,7 @@ fn main() {
         };
 
         match forward_to_running_instance(&forward_command)
-            .unwrap_or_else(|err| std::process::exit(1))
+            .expect("failed to forward launch request to existing service")
         {
             ForwardOutcome::NoDaemon => {
                 info!("no resident service; this process will become the daemon");
@@ -804,7 +809,7 @@ fn main() {
 
     let (service_tx, service_rx) = async_channel::unbounded::<CommandEnvelope>();
     if !one_shot_only {
-        start_listener(service_tx.clone()).unwrap_or_else(|err| std::process::exit(1));
+        start_listener(service_tx.clone()).expect("failed to start launch request listener");
         info!("resident service listener started");
     } else {
         info!("running one-shot picker");
@@ -813,7 +818,7 @@ fn main() {
     let app = Application::new().with_assets(Assets);
 
     app.run(move |cx: &mut App| {
-        FontAssets::load_fonts(cx).unwrap_or_else(|err| std::process::exit(1));
+        FontAssets::load_fonts(cx).expect("failed to load bundled fonts");
         make_dockless();
         if !one_shot_only {
             hotkey::install_event_handler(service_tx.clone());

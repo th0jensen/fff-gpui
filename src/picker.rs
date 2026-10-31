@@ -553,14 +553,18 @@ impl FffPicker {
 
     // Close the popup when the window loses focus, matching Raycast-style dismissal.
     pub fn install_focus_lost_dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.dismiss_on_window_blur = Some(cx.observe_window_activation(window, |_this, window, _cx| {
-            if !window.is_window_active() {
-                window.remove_window();
-            }
-        }));
-        self.dismiss_on_blur = Some(cx.on_blur(&self.focus_handle, window, |_this, window, _cx| {
-            window.remove_window();
-        }));
+        self.dismiss_on_window_blur =
+            Some(cx.observe_window_activation(window, |_this, window, _cx| {
+                if !window.is_window_active() {
+                    window.remove_window();
+                }
+            }));
+        self.dismiss_on_blur =
+            Some(
+                cx.on_blur(&self.focus_handle, window, |_this, window, _cx| {
+                    window.remove_window();
+                }),
+            );
     }
 
     // Start the file indexer and trigger the initial search when indexing is ready.

@@ -116,7 +116,7 @@ mod mac {
     unsafe fn ensure_view_class() {
         if VIEW_CLASS.is_null() {
             let mut decl = ClassDecl::new("FFFStatusItemView", class!(NSView))
-                .unwrap_or_else(|| std::process::exit(1));
+                .expect("failed to declare status item view class");
             decl.add_ivar::<*mut core::ffi::c_void>(STATE_IVAR);
             decl.add_method(sel!(dealloc), dealloc_view as extern "C" fn(&Object, Sel));
             decl.add_method(

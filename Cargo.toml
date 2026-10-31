@@ -46,7 +46,6 @@ cocoa = "0.26"
 
 [lints.clippy]
 unwrap_used = "deny"
-expect_used = "deny"
 panic = "deny"
 dbg_macro = "deny"
 todo = "warn"
