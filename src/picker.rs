@@ -1730,8 +1730,11 @@ impl Render for FffPicker {
                                                                         theme.icon_muted,
                                                                     ))
                                                                     .when(content_match.is_some(), |d| {
-                                                                        let (text, ranges) =
-                                                                            content_match.as_ref().unwrap();
+                                                                        let Some((text, ranges)) =
+                                                                            content_match.as_ref()
+                                                                        else {
+                                                                            return d;
+                                                                        };
                                                                         d.child(
                                                                             div()
                                                                                 .text_color(rgb(

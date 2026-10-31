@@ -584,9 +584,13 @@ impl Element for TextFieldElement {
             window.paint_quad(selection);
         }
 
-        let line = prepaint.line.take().unwrap();
-        line.paint(bounds.origin, window.line_height(), window, cx)
-            .unwrap();
+        let line = match prepaint.line.take() {
+            Some(line) => line,
+            None => return,
+        };
+        if let Err(err) = line.paint(bounds.origin, window.line_height(), window, cx) {
+            tracing::warn!(?err, "failed to paint text field line");
+        }
 
         if focus_handle.is_focused(window)
             && let Some(cursor) = prepaint.cursor.take()

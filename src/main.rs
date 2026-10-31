@@ -524,7 +524,7 @@ fn open_window(
             view
         },
     )
-    .expect("failed to open fff window");
+    .unwrap_or_else(|err| std::process::exit(1));
 }
 
 fn close_all_windows(cx: &mut App) {
@@ -772,7 +772,7 @@ fn main() {
         };
 
         match forward_to_running_instance(&forward_command)
-            .expect("failed to forward launch request to existing service")
+            .unwrap_or_else(|err| std::process::exit(1))
         {
             ForwardOutcome::NoDaemon => {
                 info!("no resident service; this process will become the daemon");
@@ -804,7 +804,7 @@ fn main() {
 
     let (service_tx, service_rx) = async_channel::unbounded::<CommandEnvelope>();
     if !one_shot_only {
-        start_listener(service_tx.clone()).expect("failed to start launch request listener");
+        start_listener(service_tx.clone()).unwrap_or_else(|err| std::process::exit(1));
         info!("resident service listener started");
     } else {
         info!("running one-shot picker");
@@ -813,7 +813,7 @@ fn main() {
     let app = Application::new().with_assets(Assets);
 
     app.run(move |cx: &mut App| {
-        FontAssets::load_fonts(cx).expect("failed to load bundled fonts");
+        FontAssets::load_fonts(cx).unwrap_or_else(|err| std::process::exit(1));
         make_dockless();
         if !one_shot_only {
             hotkey::install_event_handler(service_tx.clone());

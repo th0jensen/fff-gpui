@@ -1,64 +1,46 @@
 # AGENTS.md
 
-## Project
+.rules
 
-fff-gpui: a macOS desktop file finder built with Rust and GPUI.
+# Rust coding guidelines
 
-## Setup
+* Prioritize code correctness and clarity. Speed and efficiency are secondary priorities unless otherwise specified.
+* Do not write comments that summarize the code. Comments should only explain "why" when the reason is tricky or non-obvious.
+* Prefer implementing functionality in existing files unless it is a new logical component. Avoid creating many small files.
+* Avoid using functions that panic like `unwrap()`; prefer `?` to propagate errors.
+* Be careful with operations like indexing which may panic if the indexes are out of bounds.
+* Never silently discard errors with `let _ =` on fallible operations. Always handle errors appropriately:
+  - Propagate errors with `?` when the calling function should handle them
+  - Use explicit error handling with `match` or `if let Err(...)` when you need custom logic
+* When implementing async operations that may fail, ensure errors propagate so users get meaningful feedback.
+* Never create files with `mod.rs` paths; prefer `src/some_module.rs`.
+* Use full words for variable names (no abbreviations).
+* Use variable shadowing to scope clones in async contexts for clarity.
+* Prefer `cargo fmt` and `cargo clippy` (see `.github/workflows`) before committing.
 
-Requirements:
-- macOS (Apple Silicon or Intel)
-- Rust stable via rustup
-- Xcode Command Line Tools
-- CMake
-- Zig 0.16.0 (required by zlob); disable zlob feature to build without it
-
-Install dependencies and build:
+# Build
 
 ```sh
 cargo build
-```
-
-Release build:
-
-```sh
 cargo build --release
 ```
 
-## Test
-
-Run all tests:
+# Test
 
 ```sh
 cargo test
-```
-
-Run a single test:
-
-```sh
 cargo test <test_name>
 ```
 
-## Lint and Format
+In tests, prefer GPUI executor timers over `smol::Timer::after(...)` when relying on `run_until_parked()`.
 
-Format:
-
-```sh
-cargo fmt
-```
-
-Check formatting:
+# Lint and Format
 
 ```sh
 cargo fmt --check
-```
-
-Lint:
-
-```sh
 cargo clippy -- -D warnings
 ```
 
-## CI
+# CI
 
-Pull requests run `.github/workflows/macos-test-build.yaml` (build + tests on macOS). Releases are triggered by `v*` tags via `.github/workflows/release-macos.yaml`.
+Pull requests run `.github/workflows/macos-test-build.yaml`. Releases are triggered by `v*` tags via `.github/workflows/release-macos.yaml`.

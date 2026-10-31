@@ -43,7 +43,7 @@ fn env_filter(var_name: &str, default_directives: &str) -> EnvFilter {
         .unwrap_or_else(|| {
             default_directives
                 .parse()
-                .expect("default tracing directives must be valid")
+                .unwrap_or_else(|_| std::process::exit(1))
         })
 }
 
@@ -52,7 +52,7 @@ pub fn init_tracing(print_to_stdout: bool) {
     let stdout_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         "fff_gpui=info,fff_search=info,fff_query_parser=warn,fff_grep=warn,gpui=warn,ignore=warn,smol=warn"
             .parse()
-            .expect("default tracing directives must be valid")
+            .unwrap_or_else(|_| std::process::exit(1))
     });
     let file_filter = env_filter(
         "FFF_GPUI_FILE_LOG",

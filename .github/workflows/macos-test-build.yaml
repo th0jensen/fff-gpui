@@ -27,11 +27,14 @@ jobs:
       CARGO_TERM_COLOR: always
       TARGET: ${{ matrix.target }}
       ARCH: ${{ matrix.arch }}
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
 
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - uses: mozilla-actions/sccache-action@v0.0.4
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.16.0
