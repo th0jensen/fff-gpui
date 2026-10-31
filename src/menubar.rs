@@ -115,7 +115,8 @@ mod mac {
 
     unsafe fn ensure_view_class() {
         if VIEW_CLASS.is_null() {
-            let mut decl = ClassDecl::new("FFFStatusItemView", class!(NSView)).unwrap();
+            let mut decl = ClassDecl::new("FFFStatusItemView", class!(NSView))
+                .expect("failed to declare status item view class");
             decl.add_ivar::<*mut core::ffi::c_void>(STATE_IVAR);
             decl.add_method(sel!(dealloc), dealloc_view as extern "C" fn(&Object, Sel));
             decl.add_method(
@@ -144,13 +145,15 @@ mod mac {
                 let state_ref = state.borrow();
                 let commands = state_ref.commands.clone();
                 let event: id = msg_send![NSApp(), currentEvent];
-                let button_number: isize = if event == nil {
-                    0
+                let is_right_click = if event == nil {
+                    false
                 } else {
-                    msg_send![event, buttonNumber]
+                    let button_number: isize = msg_send![event, buttonNumber];
+                    let event_type: usize = msg_send![event, type];
+                    button_number != 0 || event_type == 4
                 };
 
-                if button_number == 1 {
+                if is_right_click {
                     let menu = build_menu(this);
                     let _: () = msg_send![state_ref.status_item, popUpStatusItemMenu: menu];
                 } else {
