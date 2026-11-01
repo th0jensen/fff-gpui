@@ -1,0 +1,75 @@
+name: Nightly tip build - macOS
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+  schedule:
+    - cron: "0 4 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightly-tip-macos
+  cancel-in-progress: true
+
+jobs:
+  build-and-release:
+    name: Build and publish tip
+    runs-on: macos-15
+    timeout-minutes: 60
+
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build arm64
+        run: cargo build --release --target aarch64-apple-darwin
+
+      - name: Build x86_64
+        run: cargo build --release --target x86_64-apple-darwin
+
+      - name: Codesign
+        run: |
+          codesign --deep --force --sign - target/aarch64-apple-darwin/release/fff-gpui
+          codesign --deep --force --sign - target/x86_64-apple-darwin/release/fff-gpui
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp target/aarch64-apple-darwin/release/fff-gpui dist/fff-gpui-macos-arm64
+          lipo -create -output dist/fff-gpui-macos-universal \
+            target/aarch64-apple-darwin/release/fff-gpui \
+            target/x86_64-apple-darwin/release/fff-gpui
+          codesign --deep --force --sign - dist/fff-gpui-macos-universal
+
+      - name: Publish rolling tip release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view tip >/dev/null 2>&1; then
+            gh release upload tip dist/fff-gpui-macos-arm64 dist/fff-gpui-macos-universal --clobber
+          else
+            gh release create tip \
+              dist/fff-gpui-macos-arm64 \
+              dist/fff-gpui-macos-universal \
+              --title "fff-gpui tip (rolling)" \
+              --notes "Rolling build from \`master\`. Unnotarized, ad-hoc signed. Updated on every push to master." \
+              --prerelease
+          fi
