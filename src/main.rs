@@ -82,6 +82,8 @@ struct LaunchOptions {
     debug_traces: bool,
     show_help: bool,
     show_version: bool,
+    install_service: bool,
+    uninstall_service: bool,
 }
 
 type ResponderArc = Arc<Mutex<Option<service::ClientStream>>>;
@@ -176,6 +178,8 @@ fn parse_launch_options() -> LaunchOptions {
     let mut debug_traces = false;
     let mut show_help = false;
     let mut show_version = false;
+    let mut install_service = false;
+    let mut uninstall_service = false;
     let mut args = std::env::args().skip(1);
 
     while let Some(arg) = args.next() {
@@ -186,6 +190,16 @@ fn parse_launch_options() -> LaunchOptions {
 
         if arg == "-V" || arg == "--version" {
             show_version = true;
+            continue;
+        }
+
+        if arg == "--install-service" {
+            install_service = true;
+            continue;
+        }
+
+        if arg == "--uninstall-service" {
+            uninstall_service = true;
             continue;
         }
 
@@ -227,6 +241,8 @@ fn parse_launch_options() -> LaunchOptions {
         debug_traces,
         show_help,
         show_version,
+        install_service,
+        uninstall_service,
     }
 }
 
@@ -250,6 +266,8 @@ fn print_help() {
           --std-out             Print result to stdout
           -o, --open <PATH>     Open a specific path
           -d, --debug           Print traces to stdout
+          --install-service     Install a LaunchAgent that starts the daemon on demand
+          --uninstall-service   Remove that LaunchAgent
           -h, --help            Show this help text
           -V, --version         Show version information
     "}
@@ -743,6 +761,23 @@ fn main() {
     }
     if launch.show_version {
         println!("fff-gpui {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+    if launch.install_service || launch.uninstall_service {
+        let result = if launch.install_service {
+            service::install_launch_agent().map(|path| {
+                println!(
+                    "installed {}; fff-gpui now starts on the first request",
+                    path.display()
+                )
+            })
+        } else {
+            service::uninstall_launch_agent().map(|()| println!("removed the fff-gpui LaunchAgent"))
+        };
+        if let Err(err) = result {
+            eprintln!("fff-gpui: {err:#}");
+            std::process::exit(1);
+        }
         return;
     }
     let base_path = launch.base_path.clone();

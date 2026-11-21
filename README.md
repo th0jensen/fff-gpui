@@ -172,25 +172,10 @@ login, replace the Homebrew service with a socket-activated LaunchAgent:
 
 ```sh
 brew services stop fff-gpui
-mkdir -p ~/.local/state/fff-gpui ~/Library/LaunchAgents
-rm -f ~/.local/state/fff-gpui/fff-gpui.sock
-cat > ~/Library/LaunchAgents/com.github.th0jensen.fff-gpui.plist <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>com.github.th0jensen.fff-gpui</string>
-  <key>ProgramArguments</key><array><string>$(command -v fff-gpui)</string></array>
-  <key>Sockets</key><dict><key>Listeners</key><dict>
-    <key>SockPathName</key><string>$HOME/.local/state/fff-gpui/fff-gpui.sock</string>
-    <key>SockPathMode</key><integer>384</integer>
-  </dict></dict>
-</dict>
-</plist>
-EOF
-launchctl bootout gui/$(id -u)/com.github.th0jensen.fff-gpui 2>/dev/null
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.github.th0jensen.fff-gpui.plist
+fff-gpui --install-service
 ```
+
+`fff-gpui --uninstall-service` removes it again.
 
 Do not combine `idle_exit_secs` with `brew services`, which restarts the daemon
 right after it exits. `global_keybind` only works while the daemon runs; to

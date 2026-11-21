@@ -349,6 +349,178 @@ pub fn start_listener(
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+const LAUNCH_AGENT_LABEL: &str = "com.github.th0jensen.fff-gpui";
+
+#[cfg(target_os = "macos")]
+fn launch_agents_dir() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/"))
+        .join("Library/LaunchAgents")
+}
+
+#[cfg(target_os = "macos")]
+fn launch_agent_path() -> PathBuf {
+    launch_agents_dir().join(format!("{LAUNCH_AGENT_LABEL}.plist"))
+}
+
+#[cfg(target_os = "macos")]
+fn launchctl(args: &[&str]) -> Result<std::process::Output> {
+    std::process::Command::new("/bin/launchctl")
+        .args(args)
+        .output()
+        .context("failed to run launchctl")
+}
+
+#[cfg(target_os = "macos")]
+fn gui_domain() -> String {
+    unsafe extern "C" {
+        fn getuid() -> u32;
+    }
+    format!("gui/{}", unsafe { getuid() })
+}
+
+#[cfg(target_os = "macos")]
+fn service_program() -> Result<PathBuf> {
+    let exe = std::env::current_exe()
+        .and_then(std::fs::canonicalize)
+        .context("failed to locate the fff-gpui binary")?;
+    // Homebrew's Cellar path changes on every upgrade; its opt link does not.
+    if let Some((prefix, _)) = exe.to_str().and_then(|path| path.split_once("/Cellar/")) {
+        let opt = PathBuf::from(prefix).join("opt/fff-gpui/bin/fff-gpui");
+        if opt.exists() {
+            return Ok(opt);
+        }
+    }
+    Ok(exe)
+}
+
+fn xml_escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+fn launch_agent_plist(label: &str, program: &str, socket: &str) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>{label}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{program}</string>
+  </array>
+  <key>Sockets</key>
+  <dict>
+    <key>Listeners</key>
+    <dict>
+      <key>SockPathName</key>
+      <string>{socket}</string>
+      <key>SockPathMode</key>
+      <integer>384</integer>
+    </dict>
+  </dict>
+</dict>
+</plist>
+"#,
+        label = xml_escape(label),
+        program = xml_escape(program),
+        socket = xml_escape(socket),
+    )
+}
+
+/// Install and load a LaunchAgent that owns the service socket, so launchd starts the daemon
+/// on the first request. Replaces an earlier install and stops a daemon started by hand.
+#[cfg(target_os = "macos")]
+pub fn install_launch_agent() -> Result<PathBuf> {
+    use std::fs;
+
+    if launch_agents_dir()
+        .join("homebrew.mxcl.fff-gpui.plist")
+        .exists()
+    {
+        anyhow::bail!(
+            "the Homebrew service is installed and would keep a second daemon running; \
+             run `brew services stop fff-gpui` first"
+        );
+    }
+
+    let program = service_program()?;
+    let socket = socket_path();
+    let plist_path = launch_agent_path();
+    let domain = gui_domain();
+
+    // Not loaded yet is fine; a loaded job must go so launchd re-reads the plist.
+    launchctl(&["bootout", &format!("{domain}/{LAUNCH_AGENT_LABEL}")])?;
+    if let ForwardOutcome::Picked(_) = forward_to_running_instance(&ServiceCommand::Quit)? {
+        info!("stopped the running daemon");
+    }
+
+    if let Some(parent) = socket.parent() {
+        fs::create_dir_all(parent).context("failed to create service directory")?;
+    }
+    match fs::remove_file(&socket) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err).context("failed to remove the old service socket"),
+    }
+    fs::create_dir_all(launch_agents_dir()).context("failed to create ~/Library/LaunchAgents")?;
+    fs::write(
+        &plist_path,
+        launch_agent_plist(
+            LAUNCH_AGENT_LABEL,
+            &program.to_string_lossy(),
+            &socket.to_string_lossy(),
+        ),
+    )
+    .with_context(|| format!("failed to write {}", plist_path.display()))?;
+
+    let plist_arg = plist_path.to_string_lossy();
+    let output = launchctl(&["bootstrap", &domain, &plist_arg])?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "launchctl bootstrap failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(plist_path)
+}
+
+#[cfg(target_os = "macos")]
+pub fn uninstall_launch_agent() -> Result<()> {
+    use std::fs;
+
+    let plist_path = launch_agent_path();
+    let output = launchctl(&["bootout", &format!("{}/{LAUNCH_AGENT_LABEL}", gui_domain())])?;
+    if !output.status.success() && !plist_path.exists() {
+        anyhow::bail!("the fff-gpui LaunchAgent is not installed");
+    }
+    for path in [plist_path, socket_path()] {
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(err).with_context(|| format!("failed to remove {}", path.display()));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn install_launch_agent() -> Result<PathBuf> {
+    anyhow::bail!("--install-service is only supported on macOS")
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn uninstall_launch_agent() -> Result<()> {
+    anyhow::bail!("--uninstall-service is only supported on macOS")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -465,6 +637,13 @@ mod tests {
         assert_eq!(back.paths[0].line, Some(12));
         assert_eq!(back.paths[0].column, Some(4));
         assert!(back.paths[1].line.is_none());
+    }
+
+    #[test]
+    fn launch_agent_plist_escapes_paths() {
+        let plist = launch_agent_plist("label", "/Apps/A&B <x>/fff-gpui", "/sock");
+        assert!(plist.contains("<string>/Apps/A&amp;B &lt;x&gt;/fff-gpui</string>"));
+        assert!(!plist.contains("A&B"));
     }
 
     #[test]
