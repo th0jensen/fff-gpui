@@ -8,6 +8,8 @@ use tracing::{info, warn};
 pub const DEFAULT_WINDOW_WIDTH: f32 = 960.0;
 pub const DEFAULT_WINDOW_HEIGHT: f32 = 520.0;
 pub const DEFAULT_PICKER_PANE_WIDTH: f32 = 430.0;
+// launchd delays relaunching a job that ran for less than its 10 s default ThrottleInterval.
+const MIN_IDLE_EXIT_SECS: u64 = 10;
 
 fn default_window_width() -> f32 {
     DEFAULT_WINDOW_WIDTH
@@ -197,8 +199,16 @@ pub fn load_config_from(path: &Path) -> Result<LoadedConfig> {
         );
         config.picker_pane_width = DEFAULT_PICKER_PANE_WIDTH;
     }
-    if config.idle_exit_secs == Some(0) {
-        config.idle_exit_secs = None;
+    match config.idle_exit_secs {
+        Some(0) => config.idle_exit_secs = None,
+        Some(secs) if secs < MIN_IDLE_EXIT_SECS => {
+            warn!(
+                value = secs,
+                "idle_exit_secs below minimum; using {MIN_IDLE_EXIT_SECS}"
+            );
+            config.idle_exit_secs = Some(MIN_IDLE_EXIT_SECS);
+        }
+        _ => {}
     }
     Ok(LoadedConfig {
         path: path.to_path_buf(),

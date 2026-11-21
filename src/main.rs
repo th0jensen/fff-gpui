@@ -697,42 +697,36 @@ async fn drive_service_commands(
     }
 }
 
-// Quit once no window has been open and no request has arrived for `idle_exit_secs`.
-// A launchd socket-activated job starts the daemon again on the next request.
-async fn exit_when_idle(
+// Answer the listener's idle checks. The listener stops accepting before the reply that lets
+// the daemon exit, so no request is accepted and then dropped by a quitting process.
+async fn answer_idle_checks(
+    checks: async_channel::Receiver<service::IdleCheck>,
+    pending_commands: async_channel::Receiver<CommandEnvelope>,
     last_activity: Rc<Cell<Instant>>,
-    runtime_config: Arc<Mutex<RuntimeConfig>>,
+    timeout: Duration,
     cx: &mut AsyncApp,
 ) {
-    loop {
-        let Some(idle_exit) = runtime_config
-            .lock()
-            .ok()
-            .and_then(|state| state.config.idle_exit_secs)
-            .map(Duration::from_secs)
-        else {
-            info!("idle exit disabled");
-            return;
-        };
-        let idle_for = last_activity.get().elapsed();
-        if idle_for < idle_exit {
-            cx.background_executor().timer(idle_exit - idle_for).await;
+    while let Ok(reply) = checks.recv().await {
+        let decision = cx.update(|app| {
+            let idle_for = last_activity.get().elapsed();
+            if !app.windows().is_empty() || !pending_commands.is_empty() {
+                Some(timeout)
+            } else if idle_for < timeout {
+                Some(timeout - idle_for)
+            } else {
+                None
+            }
+        });
+        let exit = matches!(decision, Ok(None));
+        if reply.send(decision.unwrap_or(Some(timeout))).await.is_err() {
             continue;
         }
-        let quit = cx.update(|app| {
-            if !app.windows().is_empty() {
-                return false;
+        if exit {
+            info!(idle_secs = timeout.as_secs(), "exiting after idle timeout");
+            if let Err(err) = cx.update(|app| app.quit()) {
+                info!(error = %err, "failed to quit after idle timeout");
             }
-            info!(
-                idle_secs = idle_exit.as_secs(),
-                "exiting after idle timeout"
-            );
-            app.quit();
-            true
-        });
-        match quit {
-            Ok(false) => last_activity.set(Instant::now()),
-            Ok(true) | Err(_) => return,
+            return;
         }
     }
 }
@@ -810,7 +804,8 @@ fn main() {
     let one_shot_only = should_open_initial_picker(&launch);
     // A launchd socket-activated job must not forward: the request would reach launchd's
     // socket and wait for this very process to answer it.
-    let launchd_listener = service::launchd_listener();
+    let launchd_listener =
+        service::launchd_listener().expect("failed to adopt the launchd service socket");
     if launchd_listener.is_some() {
         info!("adopted service socket from launchd; this process is the daemon");
     } else if should_forward_to_running_instance(&launch) {
@@ -858,8 +853,14 @@ fn main() {
     }
 
     let (service_tx, service_rx) = async_channel::unbounded::<CommandEnvelope>();
+    let idle_timeout = loaded_config.config.idle_exit_secs.map(Duration::from_secs);
+    let (idle_check_tx, idle_check_rx) = async_channel::unbounded::<service::IdleCheck>();
     if !one_shot_only {
-        start_listener(service_tx.clone(), launchd_listener)
+        let idle_exit = idle_timeout.map(|timeout| service::IdleExit {
+            timeout,
+            checks: idle_check_tx,
+        });
+        start_listener(service_tx.clone(), launchd_listener, idle_exit)
             .expect("failed to start launch request listener");
         info!("resident service listener started");
     } else {
@@ -944,15 +945,19 @@ fn main() {
                 move |_| last_activity.set(Instant::now())
             })
             .detach();
-            if runtime_config
-                .lock()
-                .is_ok_and(|state| state.config.idle_exit_secs.is_some())
-            {
+            if let Some(timeout) = idle_timeout {
                 cx.spawn({
+                    let pending_commands = service_rx.clone();
                     let last_activity = last_activity.clone();
-                    let runtime_config = runtime_config.clone();
                     async move |cx: &mut AsyncApp| {
-                        exit_when_idle(last_activity, runtime_config, cx).await
+                        answer_idle_checks(
+                            idle_check_rx,
+                            pending_commands,
+                            last_activity,
+                            timeout,
+                            cx,
+                        )
+                        .await
                     }
                 })
                 .detach();

@@ -163,73 +163,41 @@ The daemon has a memory footprint of ~150mb idle and ~400mb when actively search
 
 ### Start on demand and exit when idle
 
-Instead of keeping the daemon running from login, you can let launchd start it
-on the first socket request and have it exit after a period of inactivity.
+Set `idle_exit_secs` (minimum 10, off by default) to have the daemon exit once no
+picker window has been open and no request has arrived for that long. It is read
+when the daemon starts.
 
-Set `idle_exit_secs` in your config. The daemon exits once no picker window has
-been open and no request has arrived for that many seconds. It is off by
-default; changing it from off to on takes effect on the next daemon start.
-
-```toml
-idle_exit_secs = 600
-```
-
-Then replace the Homebrew service with a socket-activated LaunchAgent. launchd
-owns `~/.local/state/fff-gpui/fff-gpui.sock` and starts fff-gpui when something
-connects to it, such as `fff-gpui`, the Zed tasks, or vscode-fff-gpui:
+To have launchd start the daemon on the first socket request instead of at
+login, replace the Homebrew service with a socket-activated LaunchAgent:
 
 ```sh
 brew services stop fff-gpui
-mkdir -p ~/.local/state/fff-gpui ~/Library/LaunchAgents ~/Library/Logs/fff-gpui
+mkdir -p ~/.local/state/fff-gpui ~/Library/LaunchAgents
 rm -f ~/.local/state/fff-gpui/fff-gpui.sock
 cat > ~/Library/LaunchAgents/com.github.th0jensen.fff-gpui.plist <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key>
-  <string>com.github.th0jensen.fff-gpui</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>$(command -v fff-gpui)</string>
-  </array>
-  <key>Sockets</key>
-  <dict>
-    <key>Listeners</key>
-    <dict>
-      <key>SockPathName</key>
-      <string>$HOME/.local/state/fff-gpui/fff-gpui.sock</string>
-      <key>SockPathMode</key>
-      <integer>384</integer>
-    </dict>
-  </dict>
-  <key>StandardOutPath</key>
-  <string>$HOME/Library/Logs/fff-gpui/fff-gpui.log</string>
-  <key>StandardErrorPath</key>
-  <string>$HOME/Library/Logs/fff-gpui/fff-gpui.log</string>
+  <key>Label</key><string>com.github.th0jensen.fff-gpui</string>
+  <key>ProgramArguments</key><array><string>$(command -v fff-gpui)</string></array>
+  <key>Sockets</key><dict><key>Listeners</key><dict>
+    <key>SockPathName</key><string>$HOME/.local/state/fff-gpui/fff-gpui.sock</string>
+    <key>SockPathMode</key><integer>384</integer>
+  </dict></dict>
 </dict>
 </plist>
 EOF
+launchctl bootout gui/$(id -u)/com.github.th0jensen.fff-gpui 2>/dev/null
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.github.th0jensen.fff-gpui.plist
 ```
 
-Do not combine `idle_exit_secs` with `brew services`: that service keeps the
-daemon alive, so launchd restarts it right after every idle exit.
-
-`global_keybind` only works while the daemon runs, and launchd cannot start it
-on a key press. Bind your shortcut in Shortcuts, Raycast, or skhd to a command
-that toggles the picker through the socket, which also starts the daemon:
+Do not combine `idle_exit_secs` with `brew services`, which restarts the daemon
+right after it exits. `global_keybind` only works while the daemon runs; to
+start it from a shortcut, bind the shortcut (Shortcuts, Raycast, skhd) to:
 
 ```sh
 printf '{"cmd":"toggle_window"}\n' | nc -U ~/.local/state/fff-gpui/fff-gpui.sock
-```
-
-Quitting from the menu bar stops the running daemon, but launchd starts it again
-on the next request. To remove the LaunchAgent:
-
-```sh
-launchctl bootout gui/$(id -u)/com.github.th0jensen.fff-gpui
-rm ~/Library/LaunchAgents/com.github.th0jensen.fff-gpui.plist
 ```
 
 ### Unix socket integrations
