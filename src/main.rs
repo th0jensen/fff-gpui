@@ -13,9 +13,12 @@ mod service;
 mod text_field;
 mod theme;
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use assets::{Assets, FontAssets};
 use fff_search::path_utils::expand_tilde;
@@ -676,9 +679,11 @@ async fn drive_service_commands(
     session: Arc<Mutex<PickerSession>>,
     one_shot_sessions: Arc<Mutex<HashMap<PathBuf, PickerSession>>>,
     runtime_config: Arc<Mutex<RuntimeConfig>>,
+    last_activity: Rc<Cell<Instant>>,
     app: AsyncApp,
 ) {
     while let Ok((command, stream)) = rx.recv().await {
+        last_activity.set(Instant::now());
         let _ = app.update(|app| {
             handle_service_command(
                 command,
@@ -689,6 +694,46 @@ async fn drive_service_commands(
                 app,
             )
         });
+    }
+}
+
+// Quit once no window has been open and no request has arrived for `idle_exit_secs`.
+// A launchd socket-activated job starts the daemon again on the next request.
+async fn exit_when_idle(
+    last_activity: Rc<Cell<Instant>>,
+    runtime_config: Arc<Mutex<RuntimeConfig>>,
+    cx: &mut AsyncApp,
+) {
+    loop {
+        let Some(idle_exit) = runtime_config
+            .lock()
+            .ok()
+            .and_then(|state| state.config.idle_exit_secs)
+            .map(Duration::from_secs)
+        else {
+            info!("idle exit disabled");
+            return;
+        };
+        let idle_for = last_activity.get().elapsed();
+        if idle_for < idle_exit {
+            cx.background_executor().timer(idle_exit - idle_for).await;
+            continue;
+        }
+        let quit = cx.update(|app| {
+            if !app.windows().is_empty() {
+                return false;
+            }
+            info!(
+                idle_secs = idle_exit.as_secs(),
+                "exiting after idle timeout"
+            );
+            app.quit();
+            true
+        });
+        match quit {
+            Ok(false) => last_activity.set(Instant::now()),
+            Ok(true) | Err(_) => return,
+        }
     }
 }
 
@@ -763,7 +808,12 @@ fn main() {
     );
 
     let one_shot_only = should_open_initial_picker(&launch);
-    if should_forward_to_running_instance(&launch) {
+    // A launchd socket-activated job must not forward: the request would reach launchd's
+    // socket and wait for this very process to answer it.
+    let launchd_listener = service::launchd_listener();
+    if launchd_listener.is_some() {
+        info!("adopted service socket from launchd; this process is the daemon");
+    } else if should_forward_to_running_instance(&launch) {
         let forward_command = match launch.open_path.clone() {
             Some(path) => ServiceCommand::OpenOneShot {
                 path,
@@ -809,7 +859,8 @@ fn main() {
 
     let (service_tx, service_rx) = async_channel::unbounded::<CommandEnvelope>();
     if !one_shot_only {
-        start_listener(service_tx.clone()).expect("failed to start launch request listener");
+        start_listener(service_tx.clone(), launchd_listener)
+            .expect("failed to start launch request listener");
         info!("resident service listener started");
     } else {
         info!("running one-shot picker");
@@ -887,12 +938,33 @@ fn main() {
         if !one_shot_only {
             menubar::install(service_tx.clone());
 
+            let last_activity = Rc::new(Cell::new(Instant::now()));
+            cx.on_window_closed({
+                let last_activity = last_activity.clone();
+                move |_| last_activity.set(Instant::now())
+            })
+            .detach();
+            if runtime_config
+                .lock()
+                .is_ok_and(|state| state.config.idle_exit_secs.is_some())
+            {
+                cx.spawn({
+                    let last_activity = last_activity.clone();
+                    let runtime_config = runtime_config.clone();
+                    async move |cx: &mut AsyncApp| {
+                        exit_when_idle(last_activity, runtime_config, cx).await
+                    }
+                })
+                .detach();
+            }
+
             cx.spawn(move |cx: &mut AsyncApp| {
                 drive_service_commands(
                     service_rx,
                     picker_session.clone(),
                     one_shot_sessions.clone(),
                     runtime_config.clone(),
+                    last_activity.clone(),
                     cx.clone(),
                 )
             })

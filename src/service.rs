@@ -12,6 +12,11 @@ pub type ClientStream = std::os::unix::net::UnixStream;
 #[cfg(not(unix))]
 pub type ClientStream = std::convert::Infallible;
 
+#[cfg(unix)]
+pub type ServiceListener = std::os::unix::net::UnixListener;
+#[cfg(not(unix))]
+pub type ServiceListener = std::convert::Infallible;
+
 pub type CommandEnvelope = (ServiceCommand, Option<ClientStream>);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -140,27 +145,88 @@ fn read_pick_response<R: BufRead>(mut reader: R) -> Vec<PickEntry> {
     }
 }
 
+/// Take over the socket launchd created for a LaunchAgent that declares a `Listeners` socket.
+///
+/// Returns `None` when this process was not started by such a job, so the caller binds the
+/// socket itself.
+#[cfg(target_os = "macos")]
+pub fn launchd_listener() -> Option<ServiceListener> {
+    use std::ffi::{c_char, c_int, c_void};
+    use std::os::fd::{FromRawFd, OwnedFd};
+    use std::os::unix::net::UnixListener;
+
+    unsafe extern "C" {
+        fn launch_activate_socket(
+            name: *const c_char,
+            fds: *mut *mut c_int,
+            count: *mut usize,
+        ) -> c_int;
+        fn free(pointer: *mut c_void);
+    }
+
+    let mut fds: *mut c_int = std::ptr::null_mut();
+    let mut count = 0usize;
+    let status = unsafe { launch_activate_socket(c"Listeners".as_ptr(), &mut fds, &mut count) };
+    if status != 0 {
+        debug!(status, "no launchd socket to adopt");
+        return None;
+    }
+    if fds.is_null() {
+        return None;
+    }
+    let owned: Vec<OwnedFd> = unsafe { std::slice::from_raw_parts(fds, count) }
+        .iter()
+        .map(|&fd| unsafe { OwnedFd::from_raw_fd(fd) })
+        .collect();
+    unsafe { free(fds.cast()) };
+
+    let listener = UnixListener::from(owned.into_iter().next()?);
+    // The accept loop needs blocking accepts; do not depend on the mode launchd chose.
+    if let Err(err) = listener.set_nonblocking(false) {
+        warn!(error = %err, "failed to make launchd socket blocking");
+        return None;
+    }
+    Some(listener)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn launchd_listener() -> Option<ServiceListener> {
+    None
+}
+
 /// Start the background listener that receives launch requests from subsequent invocations.
 ///
 /// The listener keeps each accepted stream alive after parsing the request: the stream is
 /// passed alongside the command so the picker can later write back a `PickResponse` on the
 /// same connection. For non-Open commands (toggle/show/quit/config) the consumer simply
 /// drops the stream, which closes the connection.
-#[instrument(skip(commands))]
-pub fn start_listener(commands: Sender<CommandEnvelope>) -> Result<()> {
+///
+/// `adopted` is a listener from `launchd_listener`; without one, the socket is bound here.
+#[instrument(skip(commands, adopted))]
+pub fn start_listener(
+    commands: Sender<CommandEnvelope>,
+    adopted: Option<ServiceListener>,
+) -> Result<()> {
     #[cfg(unix)]
     {
         use std::fs;
         use std::os::unix::net::UnixListener;
 
-        let path = socket_path();
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).context("failed to create service directory")?;
-        }
-        let _ = fs::remove_file(&path);
-        let listener = UnixListener::bind(&path)
-            .with_context(|| format!("failed to bind service socket at {}", path.display()))?;
-        info!(socket = %path.display(), "service listener bound");
+        let listener = match adopted {
+            Some(listener) => listener,
+            None => {
+                let path = socket_path();
+                if let Some(parent) = path.parent() {
+                    fs::create_dir_all(parent).context("failed to create service directory")?;
+                }
+                let _ = fs::remove_file(&path);
+                let listener = UnixListener::bind(&path).with_context(|| {
+                    format!("failed to bind service socket at {}", path.display())
+                })?;
+                info!(socket = %path.display(), "service listener bound");
+                listener
+            }
+        };
 
         thread::Builder::new()
             .name("fff-gpui-ipc".to_string())
@@ -186,7 +252,7 @@ pub fn start_listener(commands: Sender<CommandEnvelope>) -> Result<()> {
 
     #[cfg(not(unix))]
     {
-        let _ = commands;
+        let _ = (commands, adopted);
     }
 
     Ok(())

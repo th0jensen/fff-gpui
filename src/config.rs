@@ -104,6 +104,8 @@ pub struct AppConfig {
     pub font: FontConfig,
     #[serde(default)]
     pub theme: ThemeConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_exit_secs: Option<u64>,
 }
 
 impl Default for AppConfig {
@@ -119,6 +121,7 @@ impl Default for AppConfig {
             picker_pane_width: DEFAULT_PICKER_PANE_WIDTH,
             font: FontConfig::default(),
             theme: ThemeConfig::default(),
+            idle_exit_secs: None,
         }
     }
 }
@@ -193,6 +196,9 @@ pub fn load_config_from(path: &Path) -> Result<LoadedConfig> {
             "invalid picker_pane_width in config; falling back to default"
         );
         config.picker_pane_width = DEFAULT_PICKER_PANE_WIDTH;
+    }
+    if config.idle_exit_secs == Some(0) {
+        config.idle_exit_secs = None;
     }
     Ok(LoadedConfig {
         path: path.to_path_buf(),
