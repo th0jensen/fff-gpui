@@ -21,11 +21,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use assets::{Assets, FontAssets};
+use clap::Parser;
 use fff_search::path_utils::expand_tilde;
 use global_hotkey::GlobalHotKeyManager;
 use gpui::prelude::*;
 use gpui::*;
-use indoc::indoc;
 use tracing::{debug, info};
 
 use config::AppConfig;
@@ -80,8 +80,6 @@ struct LaunchOptions {
     start_in_grep: bool,
     print_stdout: bool,
     debug_traces: bool,
-    show_help: bool,
-    show_version: bool,
     install_service: bool,
     uninstall_service: bool,
 }
@@ -169,80 +167,44 @@ fn resolve_excluded_dirs(base_path: &Path, exclude_dirs: &[PathBuf]) -> Vec<Path
         .collect()
 }
 
-// Resolve the base directory from argv[1] or the user's home directory.
+#[derive(Parser)]
+#[command(version, about = "Fast, keyboard-driven file finder for macOS")]
+struct Cli {
+    /// Directory to search; defaults to your home directory
+    path: Option<PathBuf>,
+    /// Start in grep mode
+    #[arg(long = "grep")]
+    start_in_grep: bool,
+    /// Print result to stdout
+    #[arg(long = "std-out")]
+    print_stdout: bool,
+    /// Open a specific path
+    #[arg(short, long, value_name = "PATH")]
+    open: Option<PathBuf>,
+    /// Print traces to stdout
+    #[arg(short, long)]
+    debug: bool,
+    /// Install a LaunchAgent that starts the daemon at login and on demand
+    #[arg(long, conflicts_with = "uninstall_service")]
+    install_service: bool,
+    /// Remove that LaunchAgent
+    #[arg(long)]
+    uninstall_service: bool,
+}
+
+// Paths that are not directories are ignored, so the picker falls back to its defaults.
 fn parse_launch_options() -> LaunchOptions {
-    let mut base_path = None;
-    let mut open_path = None;
-    let mut start_in_grep = false;
-    let mut print_stdout = false;
-    let mut debug_traces = false;
-    let mut show_help = false;
-    let mut show_version = false;
-    let mut install_service = false;
-    let mut uninstall_service = false;
-    let mut args = std::env::args().skip(1);
-
-    while let Some(arg) = args.next() {
-        if arg == "-h" || arg == "--help" {
-            show_help = true;
-            continue;
-        }
-
-        if arg == "-V" || arg == "--version" {
-            show_version = true;
-            continue;
-        }
-
-        if arg == "--install-service" {
-            install_service = true;
-            continue;
-        }
-
-        if arg == "--uninstall-service" {
-            uninstall_service = true;
-            continue;
-        }
-
-        if arg == "--grep" {
-            start_in_grep = true;
-            continue;
-        }
-
-        if arg == "--std-out" {
-            print_stdout = true;
-            continue;
-        }
-
-        if arg == "-d" || arg == "--debug" {
-            debug_traces = true;
-            continue;
-        }
-
-        if arg == "-o" || arg == "--open" {
-            if let Some(path) = args.next().map(PathBuf::from).and_then(normalize_dir) {
-                open_path = Some(path);
-            }
-            continue;
-        }
-
-        if base_path.is_none()
-            && let Some(path) = normalize_dir(PathBuf::from(arg))
-        {
-            base_path = Some(path);
-        }
-    }
-
+    let cli = Cli::parse();
+    let base_path = cli.path.and_then(normalize_dir);
     LaunchOptions {
         base_path: base_path.clone().unwrap_or_else(home_dir),
-        open_path,
+        open_path: cli.open.and_then(normalize_dir),
         base_path_explicit: base_path.is_some(),
-        start_in_grep,
-        print_stdout,
-        debug_traces,
-        show_help,
-        show_version,
-        install_service,
-        uninstall_service,
+        start_in_grep: cli.start_in_grep,
+        print_stdout: cli.print_stdout,
+        debug_traces: cli.debug,
+        install_service: cli.install_service,
+        uninstall_service: cli.uninstall_service,
     }
 }
 
@@ -252,27 +214,6 @@ fn should_forward_to_running_instance(launch: &LaunchOptions) -> bool {
 
 fn should_open_initial_picker(launch: &LaunchOptions) -> bool {
     launch.open_path.is_some() || launch.print_stdout
-}
-
-fn print_help() {
-    let help_msg = indoc! {"
-        fff-gpui {version}
-
-        Usage:
-          fff-gpui [OPTIONS] [PATH]
-
-        Options:
-          --grep                Start in grep mode
-          --std-out             Print result to stdout
-          -o, --open <PATH>     Open a specific path
-          -d, --debug           Print traces to stdout
-          --install-service     Install a LaunchAgent that starts the daemon on demand
-          --uninstall-service   Remove that LaunchAgent
-          -h, --help            Show this help text
-          -V, --version         Show version information
-    "}
-    .replacen("{version}", env!("CARGO_PKG_VERSION"), 1);
-    print!("{}", help_msg)
 }
 
 #[cfg(target_os = "macos")]
@@ -686,7 +627,11 @@ fn handle_service_command(
         }
         ServiceCommand::Quit => {
             debug!("received quit service command");
-            menubar::stop_service();
+            // A Homebrew service would restart the daemon right away; the LaunchAgent only
+            // restarts it on the next request, so it needs no stop.
+            if let Err(err) = service::stop_brew_service() {
+                info!(error = %err, "failed to stop the Homebrew service");
+            }
             cx.quit();
         }
     }
@@ -755,19 +700,11 @@ fn main() {
     log::init_tracing(launch.debug_traces);
     configure_allocator_for_low_rss();
 
-    if launch.show_help {
-        print_help();
-        return;
-    }
-    if launch.show_version {
-        println!("fff-gpui {}", env!("CARGO_PKG_VERSION"));
-        return;
-    }
     if launch.install_service || launch.uninstall_service {
         let result = if launch.install_service {
             service::install_launch_agent().map(|path| {
                 println!(
-                    "installed {}; fff-gpui now starts on the first request",
+                    "installed {}; fff-gpui now starts at login and on demand",
                     path.display()
                 )
             })

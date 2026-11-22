@@ -25,8 +25,12 @@ Apple Silicon and Intel supported
 ```sh
 brew tap th0jensen/fff-gpui
 brew install fff-gpui
-brew services start fff-gpui
+fff-gpui --install-service
 ```
+
+`--install-service` installs a launchd LaunchAgent that starts fff-gpui at login
+and whenever something connects to its socket. It replaces an existing
+`brew services` setup. `fff-gpui --uninstall-service` removes it.
 
 ### Build from source
 
@@ -75,10 +79,11 @@ tar -xzf fff-gpui-macos-*.tar.gz
 ```
 
 Stop any existing fff-gpui daemon before testing so requests do not go to the
-installed version. For Homebrew, use `brew services stop fff-gpui`. To test the
+installed version: run `fff-gpui --uninstall-service`. To test the
 [Unix socket integration](#unix-socket-integrations), run `./fff-gpui` without
 `--open` to start the test daemon, then send the documented requests. Quit the
-test daemon and restore your normal service when finished.
+test daemon and run `fff-gpui --install-service` with your installed binary when
+finished.
 
 These builds are ad-hoc signed, but not notarized. If macOS blocks the binary,
 review the PR's source before using **System Settings → Privacy & Security →
@@ -116,7 +121,7 @@ buffer_size = 15.0
 name = "One Dark"
 ```
 
-`editor` is a fallback for the resident Homebrew service, which does not inherit your shell environment. If `EDITOR` or `VISUAL` is present in the current process, those still win, so custom tasks and other integrations can keep overriding it naturally.
+`editor` is a fallback for the launchd service, which does not inherit your shell environment. If `EDITOR` or `VISUAL` is present in the current process, those still win, so custom tasks and other integrations can keep overriding it naturally.
 
 When `sync_zed_settings` is enabled, fff-gpui reads Zed's `settings.json` and mirrors the UI font, buffer font, font sizes, light/dark theme selection, and theme colors — from the bundled Zed themes plus any installed or local Zed theme.
 
@@ -150,7 +155,8 @@ Launch fff-gpui once to start it as a background service with your global keybin
 fff-gpui
 ```
 
-If installed via Homebrew, `brew services start fff-gpui` handles this and re-launches it at login automatically.
+`fff-gpui --install-service` does this through launchd: at login, and again on
+the next socket request after the daemon quits.
 
 
 Launch fff-gpui with the `--open <path>` flag if you don't want the daemon running:
@@ -165,21 +171,11 @@ The daemon has a memory footprint of ~150mb idle and ~400mb when actively search
 
 Set `idle_exit_secs` (minimum 10, off by default) to have the daemon exit once no
 picker window has been open and no request has arrived for that long. It is read
-when the daemon starts.
+when the daemon starts. With `--install-service`, launchd starts it again on the
+next socket request.
 
-To have launchd start the daemon on the first socket request instead of at
-login, replace the Homebrew service with a socket-activated LaunchAgent:
-
-```sh
-brew services stop fff-gpui
-fff-gpui --install-service
-```
-
-`fff-gpui --uninstall-service` removes it again.
-
-Do not combine `idle_exit_secs` with `brew services`, which restarts the daemon
-right after it exits. `global_keybind` only works while the daemon runs; to
-start it from a shortcut, bind the shortcut (Shortcuts, Raycast, skhd) to:
+`global_keybind` only works while the daemon runs; to start it from a shortcut,
+bind the shortcut (Shortcuts, Raycast, skhd) to:
 
 ```sh
 printf '{"cmd":"toggle_window"}\n' | nc -U ~/.local/state/fff-gpui/fff-gpui.sock

@@ -39,7 +39,7 @@ mimalloc = "0.1"
 objc = "0.2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-indoc = "2.0.7"
+clap = { version = "4", features = ["derive"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.26"

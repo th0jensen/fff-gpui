@@ -414,6 +414,8 @@ fn launch_agent_plist(label: &str, program: &str, socket: &str) -> String {
   <array>
     <string>{program}</string>
   </array>
+  <key>RunAtLoad</key>
+  <true/>
   <key>Sockets</key>
   <dict>
     <key>Listeners</key>
@@ -434,19 +436,16 @@ fn launch_agent_plist(label: &str, program: &str, socket: &str) -> String {
 }
 
 /// Install and load a LaunchAgent that owns the service socket, so launchd starts the daemon
-/// on the first request. Replaces an earlier install and stops a daemon started by hand.
+/// on the first request. Replaces an earlier install and the Homebrew service, and stops a
+/// daemon started by hand.
 #[cfg(target_os = "macos")]
 pub fn install_launch_agent() -> Result<PathBuf> {
     use std::fs;
 
-    if launch_agents_dir()
-        .join("homebrew.mxcl.fff-gpui.plist")
-        .exists()
-    {
-        anyhow::bail!(
-            "the Homebrew service is installed and would keep a second daemon running; \
-             run `brew services stop fff-gpui` first"
-        );
+    // The Homebrew service starts the daemon at login and keeps it alive, which would hold the
+    // socket and defeat on-demand start.
+    if stop_brew_service()? {
+        info!("stopped the Homebrew service");
     }
 
     let program = service_program()?;
@@ -488,6 +487,38 @@ pub fn install_launch_agent() -> Result<PathBuf> {
         );
     }
     Ok(plist_path)
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const BREW: &str = "/opt/homebrew/bin/brew";
+#[cfg(all(target_os = "macos", not(target_arch = "aarch64")))]
+const BREW: &str = "/usr/local/bin/brew";
+
+/// Stop and unregister the `brew services` job if it is installed; returns whether it was.
+#[cfg(target_os = "macos")]
+pub fn stop_brew_service() -> Result<bool> {
+    if !launch_agents_dir()
+        .join("homebrew.mxcl.fff-gpui.plist")
+        .exists()
+    {
+        return Ok(false);
+    }
+    let output = std::process::Command::new(BREW)
+        .args(["services", "stop", "fff-gpui"])
+        .output()
+        .with_context(|| format!("failed to run {BREW} services stop fff-gpui"))?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "brew services stop fff-gpui failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(true)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn stop_brew_service() -> Result<bool> {
+    Ok(false)
 }
 
 #[cfg(target_os = "macos")]
