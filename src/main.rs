@@ -15,13 +15,14 @@ mod theme;
 
 use std::cell::Cell;
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use assets::{Assets, FontAssets};
-use clap::{Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand};
 use fff_search::path_utils::expand_tilde;
 use global_hotkey::GlobalHotKeyManager;
 use gpui::prelude::*;
@@ -73,14 +74,18 @@ fn configure_allocator_for_low_rss() {
 }
 
 #[derive(Debug, Clone)]
-struct LaunchOptions {
-    base_path: PathBuf,
-    open_path: Option<PathBuf>,
-    base_path_explicit: bool,
-    start_in_grep: bool,
-    print_stdout: bool,
-    debug_traces: bool,
-    server: Option<ServerCommand>,
+struct PickerRequest {
+    path: PathBuf,
+    path_explicit: bool,
+    in_grep: bool,
+    query: Option<String>,
+    /// Print the picks instead of opening them in the editor.
+    print: bool,
+}
+
+enum Launch {
+    Daemon,
+    Picker(PickerRequest),
 }
 
 type ResponderArc = Arc<Mutex<Option<service::ClientStream>>>;
@@ -170,77 +175,316 @@ fn resolve_excluded_dirs(base_path: &Path, exclude_dirs: &[PathBuf]) -> Vec<Path
 #[command(
     version,
     about = "Fast, keyboard-driven file finder for macOS",
+    after_help = "Append `help` to any command for its help, such as `fff-gpui grep help`.\n\
+        Picks open in your editor, or are printed when stdout is a pipe or a file.\n\
+        Set FFF_GPUI_DEBUG=1 to also print logs to stderr.",
     args_conflicts_with_subcommands = true
 )]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
-    /// Directory to search; defaults to your home directory
-    path: Option<PathBuf>,
-    /// Start in grep mode
-    #[arg(long = "grep")]
-    start_in_grep: bool,
-    /// Print result to stdout
-    #[arg(long = "std-out")]
-    print_stdout: bool,
-    /// Open a specific path
-    #[arg(short, long, value_name = "PATH")]
-    open: Option<PathBuf>,
-    /// Print traces to stdout
-    #[arg(short, long)]
-    debug: bool,
+    #[command(flatten)]
+    files: FilesArgs,
+    // Deprecated flags, hidden and kept for one release so existing Zed tasks keep working.
+    #[arg(short = 'o', long = "open", hide = true, value_parser = parse_dir)]
+    legacy_open: Option<PathBuf>,
+    #[arg(long = "grep", hide = true)]
+    legacy_grep: bool,
+    #[arg(long = "std-out", hide = true)]
+    legacy_stdout: bool,
+    #[arg(short = 'd', long = "debug", hide = true)]
+    legacy_debug: bool,
 }
 
 #[derive(Subcommand)]
 enum Command {
+    #[command(flatten)]
+    Picker(PickerCommand),
+    /// Print the picks instead of opening them, even when stdout is a terminal
+    Stdout(StdoutArgs),
+    /// Open the config file in your editor, or check or reload it
+    Config(ConfigArgs),
     /// Manage the background daemon and its launchd service
     #[command(subcommand)]
     Server(ServerCommand),
+    /// Print the version
+    Version,
 }
 
-#[derive(Debug, Clone, Subcommand)]
+#[derive(Subcommand)]
+enum PickerCommand {
+    /// Search file names (the default command)
+    Files(FilesArgs),
+    /// Search file contents
+    Grep(GrepArgs),
+}
+
+#[derive(Args)]
+struct FilesArgs {
+    /// Directory to search; defaults to your home directory
+    #[arg(value_parser = parse_dir)]
+    path: Option<PathBuf>,
+}
+
+#[derive(Args)]
+struct GrepArgs {
+    /// Directory to search; defaults to your home directory
+    #[arg(value_parser = parse_dir)]
+    path: Option<PathBuf>,
+    /// Text to search for when the picker opens
+    query: Option<String>,
+}
+
+#[derive(Args)]
+#[command(args_conflicts_with_subcommands = true)]
+struct StdoutArgs {
+    #[command(subcommand)]
+    picker: Option<PickerCommand>,
+    #[command(flatten)]
+    files: FilesArgs,
+}
+
+#[derive(Args)]
+struct ConfigArgs {
+    #[command(subcommand)]
+    command: Option<ConfigCommand>,
+}
+
+#[derive(Subcommand)]
+enum ConfigCommand {
+    /// Check the config file for errors, unknown keys, and invalid values
+    Check,
+    /// Check the config file and apply it to the running daemon
+    Reload,
+}
+
+#[derive(Subcommand)]
 enum ServerCommand {
+    /// Run the daemon in the foreground; the launchd service runs this
+    Run,
     /// Install a LaunchAgent that starts the daemon at login and on demand
     Install,
     /// Stop the daemon and remove the LaunchAgent
     Uninstall,
-    /// Start the daemon now
+    /// Start the daemon in the background
     Start,
-    /// Stop the daemon; launchd starts it again on the next request
+    /// Stop the daemon; with the LaunchAgent, it starts again on the next request
     Stop,
     /// Restart the daemon, for example to pick up a new binary
     Restart,
     /// Show whether the service is installed and the daemon is running
     Status,
     /// Show the daemon's log
-    Logs {
-        /// Number of lines to show
-        #[arg(short = 'n', long, default_value_t = 200)]
+    Logs(LogsArgs),
+}
+
+#[derive(Args)]
+#[command(args_conflicts_with_subcommands = true)]
+struct LogsArgs {
+    #[command(subcommand)]
+    follow: Option<LogsCommand>,
+    /// Number of lines to show
+    #[arg(default_value_t = 200)]
+    lines: usize,
+}
+
+#[derive(Subcommand)]
+enum LogsCommand {
+    /// Keep printing lines as they are written
+    Follow {
+        /// Number of earlier lines to show first
+        #[arg(default_value_t = 10)]
         lines: usize,
-        /// Keep printing lines as they are written
-        #[arg(short, long)]
-        follow: bool,
     },
 }
 
-// Paths that are not directories are ignored, so the picker falls back to its defaults.
-fn parse_launch_options() -> LaunchOptions {
-    let cli = Cli::parse();
-    let base_path = cli.path.and_then(normalize_dir);
-    LaunchOptions {
-        base_path: base_path.clone().unwrap_or_else(home_dir),
-        open_path: cli.open.and_then(normalize_dir),
-        base_path_explicit: base_path.is_some(),
-        start_in_grep: cli.start_in_grep,
-        print_stdout: cli.print_stdout,
-        debug_traces: cli.debug,
-        server: cli.command.map(|Command::Server(command)| command),
+fn parse_dir(value: &str) -> Result<PathBuf, String> {
+    normalize_dir(PathBuf::from(value)).ok_or_else(|| "not a directory".to_string())
+}
+
+// `fff-gpui grep help` means `fff-gpui grep --help`, but only when every word before `help` names
+// a subcommand, so `fff-gpui grep . help` still searches for "help".
+fn expand_trailing_help(mut args: Vec<OsString>) -> Vec<OsString> {
+    let Some((last, words)) = args.split_last_mut() else {
+        return args;
+    };
+    if last != "help" {
+        return args;
+    }
+    let mut command = Cli::command();
+    let names_subcommands = words.iter().skip(1).all(|word| {
+        let subcommand = word
+            .to_str()
+            .and_then(|name| command.find_subcommand(name))
+            .cloned();
+        subcommand.map(|subcommand| command = subcommand).is_some()
+    });
+    if names_subcommands {
+        *last = OsString::from("--help");
+    }
+    args
+}
+
+// Print picks when stdout feeds another program or a file. A launcher that discards output
+// (skhd, Shortcuts) points stdout at /dev/null and should still get the editor.
+fn stdout_is_captured() -> bool {
+    use std::io::IsTerminal;
+    use std::os::fd::AsFd;
+    use std::os::unix::fs::MetadataExt;
+
+    let stdout = std::io::stdout();
+    if stdout.is_terminal() {
+        return false;
+    }
+    let Ok(fd) = stdout.as_fd().try_clone_to_owned() else {
+        return false;
+    };
+    match (
+        std::fs::File::from(fd).metadata(),
+        std::fs::metadata("/dev/null"),
+    ) {
+        (Ok(out), Ok(null)) => out.dev() != null.dev() || out.ino() != null.ino(),
+        _ => false,
     }
 }
 
-fn run_server_command(command: ServerCommand) -> anyhow::Result<()> {
+fn debug_requested(cli: &Cli) -> bool {
+    cli.legacy_debug
+        || std::env::var_os("FFF_GPUI_DEBUG").is_some_and(|value| !value.is_empty() && value != "0")
+}
+
+// Homebrew's `brew services` job runs a bare `fff-gpui`, which used to start the daemon.
+fn started_as_brew_service() -> bool {
+    std::env::args_os().len() == 1
+        && std::env::var("XPC_SERVICE_NAME").is_ok_and(|name| name.contains("fff-gpui"))
+}
+
+fn picker(path: Option<PathBuf>, in_grep: bool, query: Option<String>, print: bool) -> Launch {
+    Launch::Picker(PickerRequest {
+        path_explicit: path.is_some(),
+        path: path.unwrap_or_else(home_dir),
+        in_grep,
+        query,
+        print: print || stdout_is_captured(),
+    })
+}
+
+/// Runs commands that need no picker or daemon and returns `None` for them.
+fn launch_from_cli(cli: Cli) -> anyhow::Result<Option<Launch>> {
+    let launch = match cli.command {
+        None => {
+            if cli.legacy_open.is_some() || cli.legacy_grep || cli.legacy_stdout || cli.legacy_debug
+            {
+                eprintln!(
+                    "fff-gpui: --open, --grep, --std-out, and --debug are deprecated; use \
+                     `fff-gpui files PATH`, `fff-gpui grep PATH`, `fff-gpui stdout`, or \
+                     FFF_GPUI_DEBUG=1"
+                );
+            }
+            if started_as_brew_service() {
+                Launch::Daemon
+            } else {
+                picker(
+                    cli.legacy_open.or(cli.files.path),
+                    cli.legacy_grep,
+                    None,
+                    cli.legacy_stdout,
+                )
+            }
+        }
+        Some(Command::Picker(PickerCommand::Files(args))) => picker(args.path, false, None, false),
+        Some(Command::Picker(PickerCommand::Grep(args))) => {
+            picker(args.path, true, args.query, false)
+        }
+        Some(Command::Stdout(args)) => match args.picker {
+            None => picker(args.files.path, false, None, true),
+            Some(PickerCommand::Files(files)) => picker(files.path, false, None, true),
+            Some(PickerCommand::Grep(grep)) => picker(grep.path, true, grep.query, true),
+        },
+        Some(Command::Config(args)) => {
+            run_config_command(args.command)?;
+            return Ok(None);
+        }
+        Some(Command::Server(command)) => return run_server_command(command),
+        Some(Command::Version) => {
+            println!("fff-gpui {}", env!("CARGO_PKG_VERSION"));
+            return Ok(None);
+        }
+    };
+    Ok(Some(launch))
+}
+
+fn check_config(path: &Path) -> anyhow::Result<Vec<String>> {
+    let loaded = config::load_config_from(path)?;
+    let mut problems = loaded.warnings;
+    if let Err(err) = hotkey::parse_hotkey(loaded.config.global_keybind.as_deref()) {
+        problems.push(err.to_string());
+    }
+    Ok(problems)
+}
+
+fn run_config_command(command: Option<ConfigCommand>) -> anyhow::Result<()> {
+    use anyhow::Context as _;
+
+    let path = config::config_path();
     match command {
-        ServerCommand::Logs { lines, follow } => log::show_log(lines, follow)?,
+        None => {
+            config::ensure_config_file(&path)?;
+            let editor = config::load_config_from(&path)
+                .map(|loaded| loaded.config.editor)
+                .unwrap_or_default();
+            let mut child =
+                editor::open_in_editor(&path, None, &editor, editor::EditorLaunchMode::Foreground)?;
+            child.wait().context("failed to wait for the editor")?;
+        }
+        Some(ConfigCommand::Check) => {
+            if !path.exists() {
+                println!("no config file at {}; using defaults", path.display());
+                return Ok(());
+            }
+            let problems = check_config(&path)?;
+            if problems.is_empty() {
+                println!("{}: ok", path.display());
+            } else {
+                for problem in &problems {
+                    println!("{}: {problem}", path.display());
+                }
+                anyhow::bail!("found {} problem(s) in the config", problems.len());
+            }
+        }
+        Some(ConfigCommand::Reload) => {
+            for problem in check_config(&path)? {
+                eprintln!("fff-gpui: warning: {problem}");
+            }
+            // Asking a waiting launchd job would start the daemon only to reload it.
+            let reloaded = !service::launchd_job_waiting()?
+                && matches!(
+                    forward_to_running_instance(&ServiceCommand::ReloadConfig)?,
+                    ForwardOutcome::Picked(_)
+                );
+            if reloaded {
+                println!(
+                    "reloaded {}; idle_exit_secs changes apply after `fff-gpui server restart`",
+                    path.display()
+                );
+            } else {
+                println!(
+                    "fff-gpui is not running; it reads {} when it starts",
+                    path.display()
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn run_server_command(command: ServerCommand) -> anyhow::Result<Option<Launch>> {
+    match command {
+        ServerCommand::Run => return Ok(Some(Launch::Daemon)),
+        ServerCommand::Logs(args) => match args.follow {
+            Some(LogsCommand::Follow { lines }) => log::show_log(lines, true)?,
+            None => log::show_log(args.lines, false)?,
+        },
         #[cfg(target_os = "macos")]
         ServerCommand::Install => {
             let path = service::install_launch_agent()?;
@@ -277,15 +521,30 @@ fn run_server_command(command: ServerCommand) -> anyhow::Result<()> {
         #[cfg(not(target_os = "macos"))]
         _ => anyhow::bail!("this command manages a launchd service and only works on macOS"),
     }
-    Ok(())
+    Ok(None)
 }
 
-fn should_forward_to_running_instance(launch: &LaunchOptions) -> bool {
-    !launch.print_stdout
-}
-
-fn should_open_initial_picker(launch: &LaunchOptions) -> bool {
-    launch.open_path.is_some() || launch.print_stdout
+fn deliver_picks(entries: Vec<service::PickEntry>, print: bool, config_editor: &str) {
+    for entry in entries {
+        if print {
+            println!("{}", entry.path.display());
+            continue;
+        }
+        let goto = entry.line.zip(entry.column);
+        match editor::open_in_editor(
+            &entry.path,
+            goto,
+            config_editor,
+            editor::EditorLaunchMode::Foreground,
+        ) {
+            Ok(mut child) => {
+                if let Err(err) = child.wait() {
+                    eprintln!("fff-gpui: failed to wait for the editor: {err}");
+                }
+            }
+            Err(err) => eprintln!("fff-gpui: failed to open {}: {err}", entry.path.display()),
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -680,7 +939,11 @@ fn handle_service_command(
                 open_window(session_snapshot, query, runtime_config, cx);
             }
         }
-        ServiceCommand::OpenOneShot { path, in_grep } => {
+        ServiceCommand::OpenOneShot {
+            path,
+            in_grep,
+            query,
+        } => {
             debug!(path = %path.display(), in_grep, "received one-shot open service command");
             let print_stdout = session
                 .lock()
@@ -688,10 +951,21 @@ fn handle_service_command(
                 .unwrap_or(false);
             open_window(
                 one_shot_session(path, one_shot_sessions, in_grep, print_stdout, responder),
-                None,
+                query,
                 runtime_config,
                 cx,
             );
+        }
+        ServiceCommand::ReloadConfig => {
+            let (config, changed) = refresh_runtime_config(runtime_config);
+            if changed {
+                apply_key_bindings(cx, &config, true);
+                if let Ok(mut state) = runtime_config.lock() {
+                    register_global_hotkey(&mut state, &config);
+                }
+                theme::sync_from_config(&config, cx.window_appearance(), cx);
+            }
+            info!(changed, "reloaded config on request");
         }
         ServiceCommand::OpenConfig => {
             debug!("received open-config service command");
@@ -768,24 +1042,32 @@ async fn answer_idle_checks(
 
 // Launch the resident GPUI service.
 fn main() {
-    let launch = parse_launch_options();
-    log::init_tracing(launch.debug_traces);
+    let cli = Cli::parse_from(expand_trailing_help(std::env::args_os().collect()));
+    log::init_tracing(debug_requested(&cli));
     configure_allocator_for_low_rss();
 
-    if let Some(command) = launch.server.clone() {
-        if let Err(err) = run_server_command(command) {
+    let request = match launch_from_cli(cli) {
+        Ok(Some(Launch::Picker(request))) => Some(request),
+        Ok(Some(Launch::Daemon)) => None,
+        Ok(None) => return,
+        Err(err) => {
             eprintln!("fff-gpui: {err:#}");
             std::process::exit(1);
         }
-        return;
-    }
-    let base_path = launch.base_path.clone();
-    let picker_session = Arc::new(Mutex::new(PickerSession::new(
-        base_path.clone(),
-        launch.base_path_explicit,
-        launch.start_in_grep,
-        launch.print_stdout,
-    )));
+    };
+    let daemon = request.is_none();
+    let base_path = request
+        .as_ref()
+        .map_or_else(home_dir, |request| request.path.clone());
+    let picker_session = Arc::new(Mutex::new(match &request {
+        Some(request) => PickerSession::new(
+            request.path.clone(),
+            request.path_explicit,
+            request.in_grep,
+            request.print,
+        ),
+        None => PickerSession::new(home_dir(), false, false, false),
+    }));
     let one_shot_sessions = Arc::new(Mutex::new(HashMap::new()));
     let loaded_config = match config::load_active_config() {
         Ok(loaded) => loaded,
@@ -794,6 +1076,7 @@ fn main() {
             config::LoadedConfig {
                 path: config::config_path(),
                 config: AppConfig::default(),
+                warnings: Vec::new(),
             }
         }
     };
@@ -835,61 +1118,39 @@ fn main() {
         "startup environment"
     );
 
-    let one_shot_only = should_open_initial_picker(&launch);
-    // A launchd socket-activated job must not forward: the request would reach launchd's
-    // socket and wait for this very process to answer it.
-    let launchd_listener =
-        service::launchd_listener().expect("failed to adopt the launchd service socket");
-    if launchd_listener.is_some() {
-        info!("adopted service socket from launchd; this process is the daemon");
-    } else if should_forward_to_running_instance(&launch) {
-        let forward_command = match launch.open_path.clone() {
-            Some(path) => ServiceCommand::OpenOneShot {
-                path,
-                in_grep: launch.start_in_grep,
-            },
-            None => ServiceCommand::OpenPath {
-                path: base_path.clone(),
-                in_grep: launch.start_in_grep,
-                query: None,
-            },
+    let mut launchd_listener = None;
+    if let Some(request) = &request {
+        // Prefer a running daemon: it has the directory indexed already.
+        let command = ServiceCommand::OpenOneShot {
+            path: request.path.clone(),
+            in_grep: request.in_grep,
+            query: request.query.clone(),
         };
-
-        match forward_to_running_instance(&forward_command)
+        match forward_to_running_instance(&command)
             .expect("failed to forward launch request to existing service")
         {
-            ForwardOutcome::NoDaemon => {
-                info!("no resident service; this process will become the daemon");
-            }
+            ForwardOutcome::NoDaemon => info!("no daemon running; showing the picker here"),
             ForwardOutcome::Picked(entries) => {
                 info!(count = entries.len(), "received pick response from daemon");
-                for entry in entries {
-                    let goto = entry.line.zip(entry.column);
-                    match editor::open_in_editor(
-                        &entry.path,
-                        goto,
-                        &loaded_config.config.editor,
-                        editor::EditorLaunchMode::Foreground,
-                    ) {
-                        Ok(mut child) => {
-                            let _ = child.wait();
-                        }
-                        Err(err) => {
-                            eprintln!("fff-gpui: failed to open {}: {err}", entry.path.display())
-                        }
-                    }
-                }
+                deliver_picks(entries, request.print, &loaded_config.config.editor);
                 return;
             }
         }
     } else {
-        info!("stdout mode requested; skipping daemon forwarding");
+        launchd_listener =
+            service::launchd_listener().expect("failed to adopt the launchd service socket");
+        if launchd_listener.is_some() {
+            info!("adopted service socket from launchd; this process is the daemon");
+        } else if service::daemon_answers() {
+            eprintln!("fff-gpui: the daemon is already running");
+            std::process::exit(1);
+        }
     }
 
     let (service_tx, service_rx) = async_channel::unbounded::<CommandEnvelope>();
     let idle_timeout = loaded_config.config.idle_exit_secs.map(Duration::from_secs);
     let (idle_check_tx, idle_check_rx) = async_channel::unbounded::<service::IdleCheck>();
-    if !one_shot_only {
+    if daemon {
         let idle_exit = idle_timeout.map(|timeout| service::IdleExit {
             timeout,
             checks: idle_check_tx,
@@ -906,7 +1167,7 @@ fn main() {
     app.run(move |cx: &mut App| {
         FontAssets::load_fonts(cx).expect("failed to load bundled fonts");
         make_dockless();
-        if !one_shot_only {
+        if daemon {
             hotkey::install_event_handler(service_tx.clone());
         }
         if let Ok(state) = runtime_config.lock() {
@@ -925,7 +1186,7 @@ fn main() {
                 open_config_file(&runtime_config);
             });
         }
-        if !one_shot_only {
+        if daemon {
             cx.spawn({
                 let runtime_config = runtime_config.clone();
                 async move |cx: &mut AsyncApp| {
@@ -939,30 +1200,16 @@ fn main() {
             })
             .detach();
         }
-        if let Some(path) = launch.open_path.clone() {
+        if let Some(request) = request.clone() {
             open_window(
                 one_shot_session(
-                    path,
+                    request.path,
                     &one_shot_sessions,
-                    launch.start_in_grep,
-                    launch.print_stdout,
+                    request.in_grep,
+                    request.print,
                     None,
                 ),
-                None,
-                &runtime_config,
-                cx,
-            );
-            cx.on_window_closed(|cx| cx.quit()).detach();
-        } else if launch.print_stdout {
-            open_window(
-                one_shot_session(
-                    base_path.clone(),
-                    &one_shot_sessions,
-                    launch.start_in_grep,
-                    launch.print_stdout,
-                    None,
-                ),
-                None,
+                request.query,
                 &runtime_config,
                 cx,
             );
@@ -970,7 +1217,7 @@ fn main() {
         } else {
             info!("launching without initial picker window");
         }
-        if !one_shot_only {
+        if daemon {
             menubar::install(service_tx.clone());
 
             let last_activity = Rc::new(Cell::new(Instant::now()));

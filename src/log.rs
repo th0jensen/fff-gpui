@@ -67,7 +67,8 @@ fn env_filter(var_name: &str, default_directives: &str) -> EnvFilter {
 }
 
 // Initialize tracing for the optional terminal stream and the persistent log file.
-pub fn init_tracing(print_to_stdout: bool) {
+// The terminal stream goes to stderr so that picks printed to stdout stay clean.
+pub fn init_tracing(print_to_terminal: bool) {
     let stdout_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         "fff_gpui=info,fff_search=info,fff_query_parser=warn,fff_grep=warn,gpui=warn,ignore=warn,smol=warn"
             .parse()
@@ -78,13 +79,13 @@ pub fn init_tracing(print_to_stdout: bool) {
         "fff_gpui=debug,fff_search=info,fff_query_parser=warn,fff_grep=warn,gpui=info,ignore=warn,smol=warn",
     );
 
-    let stdout_layer = print_to_stdout.then(|| {
+    let stdout_layer = print_to_terminal.then(|| {
         fmt::layer()
             .with_ansi(true)
             .with_target(true)
             .with_thread_ids(true)
             .with_thread_names(true)
-            .with_writer(std::io::stdout)
+            .with_writer(std::io::stderr)
             .with_filter(stdout_filter)
     });
 

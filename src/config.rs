@@ -133,6 +133,8 @@ impl Default for AppConfig {
 pub struct LoadedConfig {
     pub path: PathBuf,
     pub config: AppConfig,
+    /// Problems that were corrected or ignored while loading, for `fff-gpui config check`.
+    pub warnings: Vec<String>,
 }
 
 fn home_dir() -> PathBuf {
@@ -167,7 +169,11 @@ pub fn load_active_config() -> Result<LoadedConfig> {
 pub fn load_config_from(path: &Path) -> Result<LoadedConfig> {
     let contents = fs::read_to_string(path)
         .with_context(|| format!("failed to read config file {}", path.display()))?;
-    let mut config = toml::from_str::<AppConfig>(&contents)
+    let mut warnings = Vec::new();
+    let mut config: AppConfig =
+        serde_ignored::deserialize(toml::Deserializer::new(&contents), |key| {
+            warnings.push(format!("unknown key `{key}`"))
+        })
         .with_context(|| format!("failed to parse config file {}", path.display()))?;
     if config
         .global_keybind
@@ -180,40 +186,43 @@ pub fn load_config_from(path: &Path) -> Result<LoadedConfig> {
         .exclude_dirs
         .retain(|path| !path.as_os_str().is_empty());
     if !config.window_width.is_finite() || config.window_width <= 0.0 {
-        warn!(
-            value = config.window_width,
-            "invalid window_width in config; falling back to default"
-        );
+        warnings.push(format!(
+            "invalid window_width {}; using {DEFAULT_WINDOW_WIDTH}",
+            config.window_width
+        ));
         config.window_width = DEFAULT_WINDOW_WIDTH;
     }
     if !config.window_height.is_finite() || config.window_height <= 0.0 {
-        warn!(
-            value = config.window_height,
-            "invalid window_height in config; falling back to default"
-        );
+        warnings.push(format!(
+            "invalid window_height {}; using {DEFAULT_WINDOW_HEIGHT}",
+            config.window_height
+        ));
         config.window_height = DEFAULT_WINDOW_HEIGHT;
     }
     if !config.picker_pane_width.is_finite() || config.picker_pane_width <= 0.0 {
-        warn!(
-            value = config.picker_pane_width,
-            "invalid picker_pane_width in config; falling back to default"
-        );
+        warnings.push(format!(
+            "invalid picker_pane_width {}; using {DEFAULT_PICKER_PANE_WIDTH}",
+            config.picker_pane_width
+        ));
         config.picker_pane_width = DEFAULT_PICKER_PANE_WIDTH;
     }
     match config.idle_exit_secs {
         Some(0) => config.idle_exit_secs = None,
         Some(secs) if secs < MIN_IDLE_EXIT_SECS => {
-            warn!(
-                value = secs,
-                "idle_exit_secs below minimum; using {MIN_IDLE_EXIT_SECS}"
-            );
+            warnings.push(format!(
+                "idle_exit_secs {secs} is below the minimum; using {MIN_IDLE_EXIT_SECS}"
+            ));
             config.idle_exit_secs = Some(MIN_IDLE_EXIT_SECS);
         }
         _ => {}
     }
+    for warning in &warnings {
+        warn!(path = %path.display(), "config: {warning}");
+    }
     Ok(LoadedConfig {
         path: path.to_path_buf(),
         config,
+        warnings,
     })
 }
 

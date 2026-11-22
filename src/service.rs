@@ -44,8 +44,11 @@ pub enum ServiceCommand {
         path: PathBuf,
         #[serde(default)]
         in_grep: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        query: Option<String>,
     },
     OpenConfig,
+    ReloadConfig,
     ToggleWindow,
     Quit,
 }
@@ -413,14 +416,6 @@ fn job_state() -> Result<JobState> {
 }
 
 #[cfg(target_os = "macos")]
-fn require_launch_agent() -> Result<()> {
-    if !launch_agent_path().exists() {
-        anyhow::bail!("the fff-gpui service is not installed; run `fff-gpui server install`");
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "macos")]
 fn bootstrap_launch_agent() -> Result<()> {
     launchctl_checked(&[
         "bootstrap",
@@ -429,17 +424,65 @@ fn bootstrap_launch_agent() -> Result<()> {
     ])
 }
 
-/// Start the daemon through launchd, loading the LaunchAgent first if it was unloaded.
-#[cfg(target_os = "macos")]
-pub fn start_service() -> Result<()> {
-    require_launch_agent()?;
-    if let JobState::NotLoaded = job_state()? {
-        bootstrap_launch_agent()?;
+/// Whether something answers on the service socket. Under a loaded LaunchAgent this also makes
+/// launchd start the daemon, so check `launchd_job_waiting` first when that is unwanted.
+pub fn daemon_answers() -> bool {
+    #[cfg(unix)]
+    {
+        std::os::unix::net::UnixStream::connect(socket_path()).is_ok()
     }
-    launchctl_checked(&["kickstart", &job_target()])
+    #[cfg(not(unix))]
+    {
+        false
+    }
 }
 
-/// Ask the running daemon to quit; returns false when nothing was running.
+/// Whether the LaunchAgent is loaded but its daemon is not running yet.
+#[cfg(target_os = "macos")]
+pub fn launchd_job_waiting() -> Result<bool> {
+    Ok(matches!(job_state()?, JobState::Waiting))
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn launchd_job_waiting() -> Result<bool> {
+    Ok(false)
+}
+
+/// Start the daemon: through launchd when the LaunchAgent is installed, otherwise as a
+/// detached `fff-gpui server run`.
+#[cfg(target_os = "macos")]
+pub fn start_service() -> Result<()> {
+    use std::os::unix::process::CommandExt;
+    use std::process::Stdio;
+
+    if launch_agent_path().exists() {
+        if let JobState::NotLoaded = job_state()? {
+            bootstrap_launch_agent()?;
+        }
+        return launchctl_checked(&["kickstart", &job_target()]);
+    }
+    if daemon_answers() {
+        return Ok(());
+    }
+    let exe = std::env::current_exe().context("failed to locate the fff-gpui binary")?;
+    std::process::Command::new(exe)
+        .args(["server", "run"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .context("failed to start the daemon")?;
+    for _ in 0..100 {
+        if daemon_answers() {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    anyhow::bail!("the daemon did not start; see `fff-gpui server logs`")
+}
+
+/// Ask the running daemon to quit and wait for it; returns false when nothing was running.
 #[cfg(target_os = "macos")]
 pub fn stop_service() -> Result<bool> {
     let pid = match job_state()? {
@@ -451,20 +494,25 @@ pub fn stop_service() -> Result<bool> {
     if let ForwardOutcome::NoDaemon = forward_to_running_instance(&ServiceCommand::Quit)? {
         return Ok(false);
     }
-    if let Some(pid) = pid {
-        for _ in 0..50 {
-            if !matches!(job_state()?, JobState::Running(current) if current == pid) {
-                break;
-            }
-            thread::sleep(Duration::from_millis(100));
+    for _ in 0..50 {
+        let stopped = match pid {
+            Some(pid) => !matches!(job_state()?, JobState::Running(current) if current == pid),
+            None => !daemon_answers(),
+        };
+        if stopped {
+            break;
         }
+        thread::sleep(Duration::from_millis(100));
     }
     Ok(true)
 }
 
 #[cfg(target_os = "macos")]
 pub fn restart_service() -> Result<()> {
-    require_launch_agent()?;
+    if !launch_agent_path().exists() {
+        stop_service()?;
+        return start_service();
+    }
     match job_state()? {
         // RunAtLoad starts the daemon as part of loading.
         JobState::NotLoaded => bootstrap_launch_agent(),
@@ -478,16 +526,14 @@ pub fn restart_service() -> Result<()> {
 pub fn service_status() -> Result<String> {
     let state = job_state()?;
     let service = match (launch_agent_path().exists(), &state) {
-        (false, _) => "not installed (run `fff-gpui server install`)",
+        (false, _) => "no LaunchAgent (`fff-gpui server install` starts it at login)",
         (true, JobState::NotLoaded) => "installed, not loaded (run `fff-gpui server start`)",
         (true, _) => "installed",
     };
     let daemon = match state {
         JobState::Running(pid) => format!("running (pid {pid})"),
         JobState::Waiting => "not running; starts on the next request".to_string(),
-        JobState::NotLoaded if std::os::unix::net::UnixStream::connect(socket_path()).is_ok() => {
-            "running outside launchd".to_string()
-        }
+        JobState::NotLoaded if daemon_answers() => "running outside launchd".to_string(),
         JobState::NotLoaded => "not running".to_string(),
     };
     Ok(format!(
@@ -538,6 +584,8 @@ fn launch_agent_plist(label: &str, program: &str, socket: &str) -> String {
           <key>ProgramArguments</key>
           <array>
             <string>{program}</string>
+            <string>server</string>
+            <string>run</string>
           </array>
           <key>RunAtLoad</key>
           <true/>
@@ -668,13 +716,19 @@ mod tests {
         let cmd = ServiceCommand::OpenOneShot {
             path: PathBuf::from("/tmp/foo"),
             in_grep: true,
+            query: Some("TODO".to_string()),
         };
         let s = serde_json::to_string(&cmd).unwrap();
         let back: ServiceCommand = serde_json::from_str(&s).unwrap();
         match back {
-            ServiceCommand::OpenOneShot { path, in_grep } => {
+            ServiceCommand::OpenOneShot {
+                path,
+                in_grep,
+                query,
+            } => {
                 assert_eq!(path, PathBuf::from("/tmp/foo"));
                 assert!(in_grep);
+                assert_eq!(query.as_deref(), Some("TODO"));
             }
             other => panic!("unexpected variant: {other:?}"),
         }
@@ -700,6 +754,7 @@ mod tests {
     fn round_trip_unit_variants() {
         for cmd in [
             ServiceCommand::OpenConfig,
+            ServiceCommand::ReloadConfig,
             ServiceCommand::ToggleWindow,
             ServiceCommand::Quit,
         ] {
