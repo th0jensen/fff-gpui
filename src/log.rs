@@ -9,7 +9,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::prelude::*;
 
 // Return the log path used for file-backed tracing output.
-fn log_path() -> PathBuf {
+pub fn log_path() -> PathBuf {
     std::env::var("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("/tmp"))
@@ -32,6 +32,25 @@ impl<'a> MakeWriter<'a> for LogFileWriter {
             Err(_) => Box::new(io::sink()),
         }
     }
+}
+
+pub fn show_log(lines: usize, follow: bool) -> anyhow::Result<()> {
+    use anyhow::Context as _;
+
+    let path = log_path();
+    if !path.exists() {
+        anyhow::bail!("no log yet at {}", path.display());
+    }
+    let mut tail = std::process::Command::new("/usr/bin/tail");
+    tail.arg("-n").arg(lines.to_string());
+    if follow {
+        tail.arg("-F");
+    }
+    let status = tail.arg(&path).status().context("failed to run tail")?;
+    if !status.success() {
+        anyhow::bail!("tail exited with {status}");
+    }
+    Ok(())
 }
 
 // Build a filter from an env var, falling back to a sane default that keeps

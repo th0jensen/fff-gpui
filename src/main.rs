@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use assets::{Assets, FontAssets};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use fff_search::path_utils::expand_tilde;
 use global_hotkey::GlobalHotKeyManager;
 use gpui::prelude::*;
@@ -80,8 +80,7 @@ struct LaunchOptions {
     start_in_grep: bool,
     print_stdout: bool,
     debug_traces: bool,
-    install_service: bool,
-    uninstall_service: bool,
+    server: Option<ServerCommand>,
 }
 
 type ResponderArc = Arc<Mutex<Option<service::ClientStream>>>;
@@ -168,8 +167,14 @@ fn resolve_excluded_dirs(base_path: &Path, exclude_dirs: &[PathBuf]) -> Vec<Path
 }
 
 #[derive(Parser)]
-#[command(version, about = "Fast, keyboard-driven file finder for macOS")]
+#[command(
+    version,
+    about = "Fast, keyboard-driven file finder for macOS",
+    args_conflicts_with_subcommands = true
+)]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
     /// Directory to search; defaults to your home directory
     path: Option<PathBuf>,
     /// Start in grep mode
@@ -184,12 +189,38 @@ struct Cli {
     /// Print traces to stdout
     #[arg(short, long)]
     debug: bool,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Manage the background daemon and its launchd service
+    #[command(subcommand)]
+    Server(ServerCommand),
+}
+
+#[derive(Debug, Clone, Subcommand)]
+enum ServerCommand {
     /// Install a LaunchAgent that starts the daemon at login and on demand
-    #[arg(long, conflicts_with = "uninstall_service")]
-    install_service: bool,
-    /// Remove that LaunchAgent
-    #[arg(long)]
-    uninstall_service: bool,
+    Install,
+    /// Stop the daemon and remove the LaunchAgent
+    Uninstall,
+    /// Start the daemon now
+    Start,
+    /// Stop the daemon; launchd starts it again on the next request
+    Stop,
+    /// Restart the daemon, for example to pick up a new binary
+    Restart,
+    /// Show whether the service is installed and the daemon is running
+    Status,
+    /// Show the daemon's log
+    Logs {
+        /// Number of lines to show
+        #[arg(short = 'n', long, default_value_t = 200)]
+        lines: usize,
+        /// Keep printing lines as they are written
+        #[arg(short, long)]
+        follow: bool,
+    },
 }
 
 // Paths that are not directories are ignored, so the picker falls back to its defaults.
@@ -203,9 +234,50 @@ fn parse_launch_options() -> LaunchOptions {
         start_in_grep: cli.start_in_grep,
         print_stdout: cli.print_stdout,
         debug_traces: cli.debug,
-        install_service: cli.install_service,
-        uninstall_service: cli.uninstall_service,
+        server: cli.command.map(|Command::Server(command)| command),
     }
+}
+
+fn run_server_command(command: ServerCommand) -> anyhow::Result<()> {
+    match command {
+        ServerCommand::Logs { lines, follow } => log::show_log(lines, follow)?,
+        #[cfg(target_os = "macos")]
+        ServerCommand::Install => {
+            let path = service::install_launch_agent()?;
+            println!(
+                "installed {}; fff-gpui now starts at login and on demand",
+                path.display()
+            );
+        }
+        #[cfg(target_os = "macos")]
+        ServerCommand::Uninstall => {
+            service::uninstall_launch_agent()?;
+            println!("removed the fff-gpui LaunchAgent");
+        }
+        #[cfg(target_os = "macos")]
+        ServerCommand::Start => {
+            service::start_service()?;
+            println!("fff-gpui is running");
+        }
+        #[cfg(target_os = "macos")]
+        ServerCommand::Stop => {
+            if service::stop_service()? {
+                println!("stopped fff-gpui");
+            } else {
+                println!("fff-gpui is not running");
+            }
+        }
+        #[cfg(target_os = "macos")]
+        ServerCommand::Restart => {
+            service::restart_service()?;
+            println!("restarted fff-gpui");
+        }
+        #[cfg(target_os = "macos")]
+        ServerCommand::Status => print!("{}", service::service_status()?),
+        #[cfg(not(target_os = "macos"))]
+        _ => anyhow::bail!("this command manages a launchd service and only works on macOS"),
+    }
+    Ok(())
 }
 
 fn should_forward_to_running_instance(launch: &LaunchOptions) -> bool {
@@ -700,18 +772,8 @@ fn main() {
     log::init_tracing(launch.debug_traces);
     configure_allocator_for_low_rss();
 
-    if launch.install_service || launch.uninstall_service {
-        let result = if launch.install_service {
-            service::install_launch_agent().map(|path| {
-                println!(
-                    "installed {}; fff-gpui now starts at login and on demand",
-                    path.display()
-                )
-            })
-        } else {
-            service::uninstall_launch_agent().map(|()| println!("removed the fff-gpui LaunchAgent"))
-        };
-        if let Err(err) = result {
+    if let Some(command) = launch.server.clone() {
+        if let Err(err) = run_server_command(command) {
             eprintln!("fff-gpui: {err:#}");
             std::process::exit(1);
         }

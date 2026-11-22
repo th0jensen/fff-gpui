@@ -25,12 +25,13 @@ Apple Silicon and Intel supported
 ```sh
 brew tap th0jensen/fff-gpui
 brew install fff-gpui
-fff-gpui --install-service
+fff-gpui server install
 ```
 
-`--install-service` installs a launchd LaunchAgent that starts fff-gpui at login
+`fff-gpui server install` installs a launchd LaunchAgent that starts fff-gpui at login
 and whenever something connects to its socket. It replaces an existing
-`brew services` setup. `fff-gpui --uninstall-service` removes it.
+`brew services` setup. Manage it with `fff-gpui server start`, `stop`, `restart`,
+`status`, `logs`, and `uninstall`.
 
 ### Build from source
 
@@ -79,10 +80,10 @@ tar -xzf fff-gpui-macos-*.tar.gz
 ```
 
 Stop any existing fff-gpui daemon before testing so requests do not go to the
-installed version: run `fff-gpui --uninstall-service`. To test the
+installed version: run `fff-gpui server uninstall`. To test the
 [Unix socket integration](#unix-socket-integrations), run `./fff-gpui` without
 `--open` to start the test daemon, then send the documented requests. Quit the
-test daemon and run `fff-gpui --install-service` with your installed binary when
+test daemon and run `fff-gpui server install` with your installed binary when
 finished.
 
 These builds are ad-hoc signed, but not notarized. If macOS blocks the binary,
@@ -155,7 +156,7 @@ Launch fff-gpui once to start it as a background service with your global keybin
 fff-gpui
 ```
 
-`fff-gpui --install-service` does this through launchd: at login, and again on
+`fff-gpui server install` does this through launchd: at login, and again on
 the next socket request after the daemon quits.
 
 
@@ -171,7 +172,7 @@ The daemon has a memory footprint of ~150mb idle and ~400mb when actively search
 
 Set `idle_exit_secs` (minimum 10, off by default) to have the daemon exit once no
 picker window has been open and no request has arrived for that long. It is read
-when the daemon starts. With `--install-service`, launchd starts it again on the
+when the daemon starts. With `fff-gpui server install`, launchd starts it again on the
 next socket request.
 
 `global_keybind` only works while the daemon runs; to start it from a shortcut,

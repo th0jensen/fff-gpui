@@ -375,6 +375,129 @@ fn launchctl(args: &[&str]) -> Result<std::process::Output> {
 }
 
 #[cfg(target_os = "macos")]
+fn launchctl_checked(args: &[&str]) -> Result<()> {
+    let output = launchctl(args)?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "launchctl {} failed: {}",
+            args.first().copied().unwrap_or_default(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn job_target() -> String {
+    format!("{}/{LAUNCH_AGENT_LABEL}", gui_domain())
+}
+
+#[cfg(target_os = "macos")]
+enum JobState {
+    NotLoaded,
+    Waiting,
+    Running(u32),
+}
+
+#[cfg(target_os = "macos")]
+fn job_state() -> Result<JobState> {
+    let output = launchctl(&["print", &job_target()])?;
+    if !output.status.success() {
+        return Ok(JobState::NotLoaded);
+    }
+    // Only the job's own top-level `pid` line, not those of nested entries.
+    let pid = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| line.strip_prefix("\tpid = ")?.trim().parse().ok());
+    Ok(pid.map_or(JobState::Waiting, JobState::Running))
+}
+
+#[cfg(target_os = "macos")]
+fn require_launch_agent() -> Result<()> {
+    if !launch_agent_path().exists() {
+        anyhow::bail!("the fff-gpui service is not installed; run `fff-gpui server install`");
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn bootstrap_launch_agent() -> Result<()> {
+    launchctl_checked(&[
+        "bootstrap",
+        &gui_domain(),
+        &launch_agent_path().to_string_lossy(),
+    ])
+}
+
+/// Start the daemon through launchd, loading the LaunchAgent first if it was unloaded.
+#[cfg(target_os = "macos")]
+pub fn start_service() -> Result<()> {
+    require_launch_agent()?;
+    if let JobState::NotLoaded = job_state()? {
+        bootstrap_launch_agent()?;
+    }
+    launchctl_checked(&["kickstart", &job_target()])
+}
+
+/// Ask the running daemon to quit; returns false when nothing was running.
+#[cfg(target_os = "macos")]
+pub fn stop_service() -> Result<bool> {
+    let pid = match job_state()? {
+        // Connecting to launchd's socket now would start the daemon just to stop it.
+        JobState::Waiting => return Ok(false),
+        JobState::Running(pid) => Some(pid),
+        JobState::NotLoaded => None,
+    };
+    if let ForwardOutcome::NoDaemon = forward_to_running_instance(&ServiceCommand::Quit)? {
+        return Ok(false);
+    }
+    if let Some(pid) = pid {
+        for _ in 0..50 {
+            if !matches!(job_state()?, JobState::Running(current) if current == pid) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+    }
+    Ok(true)
+}
+
+#[cfg(target_os = "macos")]
+pub fn restart_service() -> Result<()> {
+    require_launch_agent()?;
+    match job_state()? {
+        // RunAtLoad starts the daemon as part of loading.
+        JobState::NotLoaded => bootstrap_launch_agent(),
+        JobState::Waiting | JobState::Running(_) => {
+            launchctl_checked(&["kickstart", "-k", &job_target()])
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub fn service_status() -> Result<String> {
+    let state = job_state()?;
+    let service = match (launch_agent_path().exists(), &state) {
+        (false, _) => "not installed (run `fff-gpui server install`)",
+        (true, JobState::NotLoaded) => "installed, not loaded (run `fff-gpui server start`)",
+        (true, _) => "installed",
+    };
+    let daemon = match state {
+        JobState::Running(pid) => format!("running (pid {pid})"),
+        JobState::Waiting => "not running; starts on the next request".to_string(),
+        JobState::NotLoaded if std::os::unix::net::UnixStream::connect(socket_path()).is_ok() => {
+            "running outside launchd".to_string()
+        }
+        JobState::NotLoaded => "not running".to_string(),
+    };
+    Ok(format!(
+        "service: {service}\ndaemon:  {daemon}\nsocket:  {}\nlog:     {}\n",
+        socket_path().display(),
+        crate::log::log_path().display()
+    ))
+}
+
+#[cfg(target_os = "macos")]
 fn gui_domain() -> String {
     unsafe extern "C" {
         fn getuid() -> u32;
@@ -453,10 +576,9 @@ pub fn install_launch_agent() -> Result<PathBuf> {
     let program = service_program()?;
     let socket = socket_path();
     let plist_path = launch_agent_path();
-    let domain = gui_domain();
 
     // Not loaded yet is fine; a loaded job must go so launchd re-reads the plist.
-    launchctl(&["bootout", &format!("{domain}/{LAUNCH_AGENT_LABEL}")])?;
+    launchctl(&["bootout", &job_target()])?;
     if let ForwardOutcome::Picked(_) = forward_to_running_instance(&ServiceCommand::Quit)? {
         info!("stopped the running daemon");
     }
@@ -480,14 +602,7 @@ pub fn install_launch_agent() -> Result<PathBuf> {
     )
     .with_context(|| format!("failed to write {}", plist_path.display()))?;
 
-    let plist_arg = plist_path.to_string_lossy();
-    let output = launchctl(&["bootstrap", &domain, &plist_arg])?;
-    if !output.status.success() {
-        anyhow::bail!(
-            "launchctl bootstrap failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
+    bootstrap_launch_agent()?;
     Ok(plist_path)
 }
 
@@ -528,7 +643,7 @@ pub fn uninstall_launch_agent() -> Result<()> {
     use std::fs;
 
     let plist_path = launch_agent_path();
-    let output = launchctl(&["bootout", &format!("{}/{LAUNCH_AGENT_LABEL}", gui_domain())])?;
+    let output = launchctl(&["bootout", &job_target()])?;
     if !output.status.success() && !plist_path.exists() {
         anyhow::bail!("the fff-gpui LaunchAgent is not installed");
     }
@@ -542,16 +657,6 @@ pub fn uninstall_launch_agent() -> Result<()> {
         }
     }
     Ok(())
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn install_launch_agent() -> Result<PathBuf> {
-    anyhow::bail!("--install-service is only supported on macOS")
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn uninstall_launch_agent() -> Result<()> {
-    anyhow::bail!("--uninstall-service is only supported on macOS")
 }
 
 #[cfg(test)]
