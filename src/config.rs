@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
+use indoc::indoc;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
@@ -216,14 +217,14 @@ pub fn load_config_from(path: &Path) -> Result<LoadedConfig> {
     })
 }
 
-const DEFAULT_CONFIG: &str = "\
-sync_zed_settings = true
-editor = \"\"
-global_keybind = \"\"
-window_width = 960.0
-window_height = 520.0
-picker_pane_width = 430.0
-";
+const DEFAULT_CONFIG: &str = indoc! {r#"
+    sync_zed_settings = true
+    editor = ""
+    global_keybind = ""
+    window_width = 960.0
+    window_height = 520.0
+    picker_pane_width = 430.0
+"#};
 
 pub fn ensure_config_file(path: &Path) -> Result<()> {
     if let Some(parent) = config_parent(path) {

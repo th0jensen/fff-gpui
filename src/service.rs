@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use async_channel::Sender;
+use indoc::formatdoc;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, instrument, warn};
 
@@ -403,32 +404,33 @@ fn xml_escape(text: &str) -> String {
 }
 
 fn launch_agent_plist(label: &str, program: &str, socket: &str) -> String {
-    format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>{label}</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>{program}</string>
-  </array>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>Sockets</key>
-  <dict>
-    <key>Listeners</key>
-    <dict>
-      <key>SockPathName</key>
-      <string>{socket}</string>
-      <key>SockPathMode</key>
-      <integer>384</integer>
-    </dict>
-  </dict>
-</dict>
-</plist>
-"#,
+    formatdoc!(
+        r#"
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+          <key>Label</key>
+          <string>{label}</string>
+          <key>ProgramArguments</key>
+          <array>
+            <string>{program}</string>
+          </array>
+          <key>RunAtLoad</key>
+          <true/>
+          <key>Sockets</key>
+          <dict>
+            <key>Listeners</key>
+            <dict>
+              <key>SockPathName</key>
+              <string>{socket}</string>
+              <key>SockPathMode</key>
+              <integer>384</integer>
+            </dict>
+          </dict>
+        </dict>
+        </plist>
+        "#,
         label = xml_escape(label),
         program = xml_escape(program),
         socket = xml_escape(socket),
