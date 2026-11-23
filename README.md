@@ -166,7 +166,9 @@ Append `help` to any command for its help, such as `fff-gpui grep help`.
 
 Picks open in your editor. When stdout is a pipe or a file, they are printed
 instead, so `nvim $(fff-gpui)` and `fff-gpui grep | xargs …` work; `fff-gpui
-stdout` forces printing. Set `FFF_GPUI_DEBUG=1` to also print logs to stderr.
+stdout` forces printing. Launchers that capture output, such as Raycast script
+commands or Shortcuts' Run Shell Script, should run `fff-gpui > /dev/null` to get
+the editor. Set `FFF_GPUI_DEBUG=1` to also print logs to stderr.
 
 The picker commands use the background daemon when it runs, which keeps
 directories indexed and handles the global keybind. Without it, they show the

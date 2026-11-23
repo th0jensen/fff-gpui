@@ -71,6 +71,8 @@ pub struct PickResponse {
 pub enum ForwardOutcome {
     NoDaemon,
     Picked(Vec<PickEntry>),
+    /// The daemon closed the connection without a response.
+    Closed,
 }
 
 fn socket_path() -> PathBuf {
@@ -120,8 +122,8 @@ pub fn forward_to_running_instance(command: &ServiceCommand) -> Result<ForwardOu
                 info!("forwarded launch request to resident service");
 
                 let reader = BufReader::new(&stream);
-                let entries = read_pick_response(reader);
-                Ok(ForwardOutcome::Picked(entries))
+                Ok(read_pick_response(reader)
+                    .map_or(ForwardOutcome::Closed, ForwardOutcome::Picked))
             }
             Err(err) => {
                 debug!(error = %err, "no resident service available");
@@ -138,23 +140,24 @@ pub fn forward_to_running_instance(command: &ServiceCommand) -> Result<ForwardOu
 }
 
 #[cfg(unix)]
-fn read_pick_response<R: BufRead>(mut reader: R) -> Vec<PickEntry> {
+/// Returns `None` when the daemon closed the connection without answering.
+fn read_pick_response<R: BufRead>(mut reader: R) -> Option<Vec<PickEntry>> {
     let mut line = String::new();
     match reader.read_line(&mut line) {
         Ok(0) => {
             debug!("daemon closed without response");
-            Vec::new()
+            None
         }
         Ok(_) => match serde_json::from_str::<PickResponse>(line.trim()) {
-            Ok(resp) => resp.paths,
+            Ok(resp) => Some(resp.paths),
             Err(err) => {
                 warn!(error = %err, line = %line.trim(), "failed to parse pick response");
-                Vec::new()
+                Some(Vec::new())
             }
         },
         Err(err) => {
             warn!(error = %err, "failed to read pick response from daemon");
-            Vec::new()
+            Some(Vec::new())
         }
     }
 }
@@ -572,7 +575,7 @@ fn xml_escape(text: &str) -> String {
         .replace('>', "&gt;")
 }
 
-fn launch_agent_plist(label: &str, program: &str, socket: &str) -> String {
+fn launch_agent_plist(label: &str, program: &str, socket: &str, log: &str) -> String {
     formatdoc!(
         r#"
         <?xml version="1.0" encoding="UTF-8"?>
@@ -599,12 +602,17 @@ fn launch_agent_plist(label: &str, program: &str, socket: &str) -> String {
               <integer>384</integer>
             </dict>
           </dict>
+          <key>StandardOutPath</key>
+          <string>{log}</string>
+          <key>StandardErrorPath</key>
+          <string>{log}</string>
         </dict>
         </plist>
         "#,
         label = xml_escape(label),
         program = xml_escape(program),
         socket = xml_escape(socket),
+        log = xml_escape(log),
     )
 }
 
@@ -627,7 +635,10 @@ pub fn install_launch_agent() -> Result<PathBuf> {
 
     // Not loaded yet is fine; a loaded job must go so launchd re-reads the plist.
     launchctl(&["bootout", &job_target()])?;
-    if let ForwardOutcome::Picked(_) = forward_to_running_instance(&ServiceCommand::Quit)? {
+    if !matches!(
+        forward_to_running_instance(&ServiceCommand::Quit)?,
+        ForwardOutcome::NoDaemon
+    ) {
         info!("stopped the running daemon");
     }
 
@@ -646,6 +657,7 @@ pub fn install_launch_agent() -> Result<PathBuf> {
             LAUNCH_AGENT_LABEL,
             &program.to_string_lossy(),
             &socket.to_string_lossy(),
+            &crate::log::log_path().to_string_lossy(),
         ),
     )
     .with_context(|| format!("failed to write {}", plist_path.display()))?;
@@ -834,7 +846,7 @@ mod tests {
 
     #[test]
     fn launch_agent_plist_escapes_paths() {
-        let plist = launch_agent_plist("label", "/Apps/A&B <x>/fff-gpui", "/sock");
+        let plist = launch_agent_plist("label", "/Apps/A&B <x>/fff-gpui", "/sock", "/log");
         assert!(plist.contains("<string>/Apps/A&amp;B &lt;x&gt;/fff-gpui</string>"));
         assert!(!plist.contains("A&B"));
     }
