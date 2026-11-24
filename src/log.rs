@@ -9,7 +9,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::prelude::*;
 
 // Return the log path used for file-backed tracing output.
-fn log_path() -> PathBuf {
+pub fn log_path() -> PathBuf {
     std::env::var("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("/tmp"))
@@ -34,6 +34,25 @@ impl<'a> MakeWriter<'a> for LogFileWriter {
     }
 }
 
+pub fn show_log(lines: usize, follow: bool) -> anyhow::Result<()> {
+    use anyhow::Context as _;
+
+    let path = log_path();
+    if !path.exists() {
+        anyhow::bail!("no log yet at {}", path.display());
+    }
+    let mut tail = std::process::Command::new("/usr/bin/tail");
+    tail.arg("-n").arg(lines.to_string());
+    if follow {
+        tail.arg("-F");
+    }
+    let status = tail.arg(&path).status().context("failed to run tail")?;
+    if !status.success() {
+        anyhow::bail!("tail exited with {status}");
+    }
+    Ok(())
+}
+
 // Build a filter from an env var, falling back to a sane default that keeps
 // our own logs useful without pulling in dependency noise.
 fn env_filter(var_name: &str, default_directives: &str) -> EnvFilter {
@@ -48,7 +67,8 @@ fn env_filter(var_name: &str, default_directives: &str) -> EnvFilter {
 }
 
 // Initialize tracing for the optional terminal stream and the persistent log file.
-pub fn init_tracing(print_to_stdout: bool) {
+// The terminal stream goes to stderr so that picks printed to stdout stay clean.
+pub fn init_tracing(print_to_terminal: bool) {
     let stdout_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         "fff_gpui=info,fff_search=info,fff_query_parser=warn,fff_grep=warn,gpui=warn,ignore=warn,smol=warn"
             .parse()
@@ -59,13 +79,13 @@ pub fn init_tracing(print_to_stdout: bool) {
         "fff_gpui=debug,fff_search=info,fff_query_parser=warn,fff_grep=warn,gpui=info,ignore=warn,smol=warn",
     );
 
-    let stdout_layer = print_to_stdout.then(|| {
+    let stdout_layer = print_to_terminal.then(|| {
         fmt::layer()
             .with_ansi(true)
             .with_target(true)
             .with_thread_ids(true)
             .with_thread_names(true)
-            .with_writer(std::io::stdout)
+            .with_writer(std::io::stderr)
             .with_filter(stdout_filter)
     });
 

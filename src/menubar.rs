@@ -244,33 +244,6 @@ mod mac {
 }
 
 #[cfg(target_os = "macos")]
-pub fn stop_service() {
-    use tracing::warn;
-
-    let brew = BREW_PRIMARY;
-    match std::process::Command::new(brew)
-        .args(["services", "stop", "fff-gpui"])
-        .status()
-    {
-        Ok(status) if status.success() => {}
-        Ok(status) => {
-            warn!(?status, "brew services stop exited unsuccessfully");
-        }
-        Err(err) => {
-            warn!(error = %err, "failed to run brew services stop");
-        }
-    }
-}
-
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-const BREW_PRIMARY: &str = "/opt/homebrew/bin/brew";
-#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-const BREW_PRIMARY: &str = "/usr/local/bin/brew";
-
-#[cfg(not(target_os = "macos"))]
-pub fn stop_service() {}
-
-#[cfg(target_os = "macos")]
 pub use mac::install;
 
 #[cfg(not(target_os = "macos"))]

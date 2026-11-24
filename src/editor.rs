@@ -58,6 +58,9 @@ pub fn open_in_editor(
     info!(editor = ?editor, "opening file with editor");
 
     let mut cmd = editor_command(&editor, path, goto);
+    // Launchd sets this for the daemon; an editor that inherits it passes it to its terminals,
+    // where fff-gpui would then mistake itself for a launchd job.
+    cmd.env_remove("XPC_SERVICE_NAME");
     #[cfg(unix)]
     if matches!(mode, EditorLaunchMode::Detached) {
         cmd.process_group(0);

@@ -25,8 +25,13 @@ Apple Silicon and Intel supported
 ```sh
 brew tap th0jensen/fff-gpui
 brew install fff-gpui
-brew services start fff-gpui
+fff-gpui daemon install
 ```
+
+`fff-gpui daemon install` installs a launchd LaunchAgent that starts fff-gpui at login
+and whenever something connects to its socket. It replaces an existing
+`brew services` setup. Manage it with `fff-gpui daemon start`, `stop`, `restart`,
+`status`, `logs`, and `uninstall`.
 
 ### Build from source
 
@@ -70,15 +75,15 @@ target, and workflow run. PR builds test the merge commit, not just the branch t
 
 ```sh
 tar -xzf fff-gpui-macos-*.tar.gz
-./fff-gpui --version
-./fff-gpui --open /path/to/project
+./fff-gpui version
+./fff-gpui files /path/to/project
 ```
 
 Stop any existing fff-gpui daemon before testing so requests do not go to the
-installed version. For Homebrew, use `brew services stop fff-gpui`. To test the
-[Unix socket integration](#unix-socket-integrations), run `./fff-gpui` without
-`--open` to start the test daemon, then send the documented requests. Quit the
-test daemon and restore your normal service when finished.
+installed version: run `fff-gpui daemon uninstall`. To test the
+[Unix socket integration](#unix-socket-integrations), run `./fff-gpui daemon run`
+to start the test daemon, then send the documented requests. Quit the test daemon and run `fff-gpui daemon install` with your installed binary when
+finished.
 
 These builds are ad-hoc signed, but not notarized. If macOS blocks the binary,
 review the PR's source before using **System Settings → Privacy & Security →
@@ -97,7 +102,7 @@ Set options in `~/.config/fff-gpui/config.toml`:
 editor = "/usr/local/bin/zed" # run `which $EDITOR` in your shell to find this path
 sync_zed_settings = true
 global_keybind = "hyper+f"
-base_dir = "~/Developer" # sets the default base_dir when launching from global keybind
+base_path = "~/Developer" # the directory the global keybind opens
 exclude_dirs = [
     "Library",
     "node_modules"
@@ -116,7 +121,11 @@ buffer_size = 15.0
 name = "One Dark"
 ```
 
-`editor` is a fallback for the resident Homebrew service, which does not inherit your shell environment. If `EDITOR` or `VISUAL` is present in the current process, those still win, so custom tasks and other integrations can keep overriding it naturally.
+Run `fff-gpui config` to open this file, `fff-gpui config check` to find typos,
+unknown keys, and invalid values, and `fff-gpui config reload` to apply changes
+to the running daemon.
+
+`editor` is a fallback for the launchd service, which does not inherit your shell environment. If `EDITOR` or `VISUAL` is present in the current process, those still win, so custom tasks and other integrations can keep overriding it naturally.
 
 When `sync_zed_settings` is enabled, fff-gpui reads Zed's `settings.json` and mirrors the UI font, buffer font, font sizes, light/dark theme selection, and theme colors — from the bundled Zed themes plus any installed or local Zed theme.
 
@@ -144,22 +153,44 @@ fff-gpui comes bundled with the same themes as Zed. These are the valid options:
 <h2>Running</h2>
 </summary>
 
-Launch fff-gpui once to start it as a background service with your global keybind:
-
 ```sh
-fff-gpui
+fff-gpui [PATH]               # pick files (same as `fff-gpui files [PATH]`)
+fff-gpui grep [PATH] [QUERY]  # search file contents
+fff-gpui stdout [grep] [PATH] # print the picks instead of opening them
+fff-gpui config [check|reload]
+fff-gpui daemon run|install|uninstall|start|stop|restart|status|logs
 ```
 
-If installed via Homebrew, `brew services start fff-gpui` handles this and re-launches it at login automatically.
+Append `help` to any command for its help, such as `fff-gpui grep help`.
+`PATH` defaults to your home directory.
 
+Picks open in your editor. When stdout is a pipe or a file, they are printed
+instead, so `nvim $(fff-gpui)` and `fff-gpui grep | xargs …` work; `fff-gpui
+stdout` forces printing. Launchers that capture output, such as Raycast script
+commands or Shortcuts' Run Shell Script, should run `fff-gpui > /dev/null` to get
+the editor. Set `FFF_GPUI_DEBUG=1` to also print logs to stderr.
 
-Launch fff-gpui with the `--open <path>` flag if you don't want the daemon running:
-
-```sh
-fff-gpui --open <path>
-```
+The picker commands use the background daemon when it runs, which keeps
+directories indexed and handles the global keybind. Without it, they show the
+picker in their own process. `fff-gpui daemon start` starts the daemon, and
+`fff-gpui daemon install` has launchd start it at login and again on the next
+request after it quits.
 
 The daemon has a memory footprint of ~150mb idle and ~400mb when actively searching. Most of the reported usage in tools like btop is macOS page reservation and will be reclaimed under memory pressure. Report issues if you experience sustained growth beyond these baselines.
+
+### Start on demand and exit when idle
+
+Set `idle_exit_secs` (minimum 10, off by default) to have the daemon exit once no
+picker window has been open and no request has arrived for that long. It is read
+when the daemon starts. With `fff-gpui daemon install`, launchd starts it again on the
+next socket request.
+
+`global_keybind` only works while the daemon runs; to start it from a shortcut,
+bind the shortcut (Shortcuts, Raycast, skhd) to:
+
+```sh
+printf '{"cmd":"toggle_window"}\n' | nc -U ~/.local/state/fff-gpui/fff-gpui.sock
+```
 
 ### Unix socket integrations
 
@@ -199,7 +230,7 @@ This is the recommended way to use fff-gpui within a project. Add the following 
 [
   {
     "label": "fff-gpui: Files",
-    "command": "/path/to/fff-gpui --open .",
+    "command": "/path/to/fff-gpui files .",
     "env": { "EDITOR": "zed" },
     "use_new_terminal": false,
     "allow_concurrent_runs": false,
@@ -213,7 +244,7 @@ This is the recommended way to use fff-gpui within a project. Add the following 
   },
   {
     "label": "fff-gpui: Grep",
-    "command": "/path/to/fff-gpui --open . --grep",
+    "command": "/path/to/fff-gpui grep .",
     "env": { "EDITOR": "zed" },
     "use_new_terminal": false,
     "allow_concurrent_runs": false,

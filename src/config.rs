@@ -2,12 +2,15 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
+use indoc::indoc;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 pub const DEFAULT_WINDOW_WIDTH: f32 = 960.0;
 pub const DEFAULT_WINDOW_HEIGHT: f32 = 520.0;
 pub const DEFAULT_PICKER_PANE_WIDTH: f32 = 430.0;
+// launchd delays relaunching a job that ran for less than its 10 s default ThrottleInterval.
+const MIN_IDLE_EXIT_SECS: u64 = 10;
 
 fn default_window_width() -> f32 {
     DEFAULT_WINDOW_WIDTH
@@ -104,6 +107,8 @@ pub struct AppConfig {
     pub font: FontConfig,
     #[serde(default)]
     pub theme: ThemeConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_exit_secs: Option<u64>,
 }
 
 impl Default for AppConfig {
@@ -119,6 +124,7 @@ impl Default for AppConfig {
             picker_pane_width: DEFAULT_PICKER_PANE_WIDTH,
             font: FontConfig::default(),
             theme: ThemeConfig::default(),
+            idle_exit_secs: None,
         }
     }
 }
@@ -127,6 +133,8 @@ impl Default for AppConfig {
 pub struct LoadedConfig {
     pub path: PathBuf,
     pub config: AppConfig,
+    /// Problems that were corrected or ignored while loading, for `fff-gpui config check`.
+    pub warnings: Vec<String>,
 }
 
 fn home_dir() -> PathBuf {
@@ -161,7 +169,11 @@ pub fn load_active_config() -> Result<LoadedConfig> {
 pub fn load_config_from(path: &Path) -> Result<LoadedConfig> {
     let contents = fs::read_to_string(path)
         .with_context(|| format!("failed to read config file {}", path.display()))?;
-    let mut config = toml::from_str::<AppConfig>(&contents)
+    let mut warnings = Vec::new();
+    let mut config: AppConfig =
+        serde_ignored::deserialize(toml::Deserializer::new(&contents), |key| {
+            warnings.push(format!("unknown key `{key}`"))
+        })
         .with_context(|| format!("failed to parse config file {}", path.display()))?;
     if config
         .global_keybind
@@ -174,40 +186,54 @@ pub fn load_config_from(path: &Path) -> Result<LoadedConfig> {
         .exclude_dirs
         .retain(|path| !path.as_os_str().is_empty());
     if !config.window_width.is_finite() || config.window_width <= 0.0 {
-        warn!(
-            value = config.window_width,
-            "invalid window_width in config; falling back to default"
-        );
+        warnings.push(format!(
+            "invalid window_width {}; using {DEFAULT_WINDOW_WIDTH}",
+            config.window_width
+        ));
         config.window_width = DEFAULT_WINDOW_WIDTH;
     }
     if !config.window_height.is_finite() || config.window_height <= 0.0 {
-        warn!(
-            value = config.window_height,
-            "invalid window_height in config; falling back to default"
-        );
+        warnings.push(format!(
+            "invalid window_height {}; using {DEFAULT_WINDOW_HEIGHT}",
+            config.window_height
+        ));
         config.window_height = DEFAULT_WINDOW_HEIGHT;
     }
     if !config.picker_pane_width.is_finite() || config.picker_pane_width <= 0.0 {
-        warn!(
-            value = config.picker_pane_width,
-            "invalid picker_pane_width in config; falling back to default"
-        );
+        warnings.push(format!(
+            "invalid picker_pane_width {}; using {DEFAULT_PICKER_PANE_WIDTH}",
+            config.picker_pane_width
+        ));
         config.picker_pane_width = DEFAULT_PICKER_PANE_WIDTH;
+    }
+    match config.idle_exit_secs {
+        Some(0) => config.idle_exit_secs = None,
+        Some(secs) if secs < MIN_IDLE_EXIT_SECS => {
+            warnings.push(format!(
+                "idle_exit_secs {secs} is below the minimum; using {MIN_IDLE_EXIT_SECS}"
+            ));
+            config.idle_exit_secs = Some(MIN_IDLE_EXIT_SECS);
+        }
+        _ => {}
+    }
+    for warning in &warnings {
+        warn!(path = %path.display(), "config: {warning}");
     }
     Ok(LoadedConfig {
         path: path.to_path_buf(),
         config,
+        warnings,
     })
 }
 
-const DEFAULT_CONFIG: &str = "\
-sync_zed_settings = true
-editor = \"\"
-global_keybind = \"\"
-window_width = 960.0
-window_height = 520.0
-picker_pane_width = 430.0
-";
+const DEFAULT_CONFIG: &str = indoc! {r#"
+    sync_zed_settings = true
+    editor = ""
+    global_keybind = ""
+    window_width = 960.0
+    window_height = 520.0
+    picker_pane_width = 430.0
+"#};
 
 pub fn ensure_config_file(path: &Path) -> Result<()> {
     if let Some(parent) = config_parent(path) {
