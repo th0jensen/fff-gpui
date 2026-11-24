@@ -125,7 +125,7 @@ jobs:
           2. Extract the binary: \`tar -xzf ${ARTIFACT_NAME}.tar.gz\`.
           3. Stop any existing fff-gpui daemon first (Homebrew: \`brew services stop fff-gpui\`).
           4. Run \`./fff-gpui version\`, then \`./fff-gpui files /path/to/project\`.
-          5. For socket testing, run \`./fff-gpui server run\` as the daemon and use the README's Unix socket examples.
+          5. For socket testing, run \`./fff-gpui daemon run\` as the daemon and use the README's Unix socket examples.
 
           Built from \`${GITHUB_SHA}\` (the merge commit on PR runs); provenance is in BUILD.txt.
           This is an ad-hoc signed, unnotarized test build, not a release.

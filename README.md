@@ -25,12 +25,12 @@ Apple Silicon and Intel supported
 ```sh
 brew tap th0jensen/fff-gpui
 brew install fff-gpui
-fff-gpui server install
+fff-gpui daemon install
 ```
 
-`fff-gpui server install` installs a launchd LaunchAgent that starts fff-gpui at login
+`fff-gpui daemon install` installs a launchd LaunchAgent that starts fff-gpui at login
 and whenever something connects to its socket. It replaces an existing
-`brew services` setup. Manage it with `fff-gpui server start`, `stop`, `restart`,
+`brew services` setup. Manage it with `fff-gpui daemon start`, `stop`, `restart`,
 `status`, `logs`, and `uninstall`.
 
 ### Build from source
@@ -80,9 +80,9 @@ tar -xzf fff-gpui-macos-*.tar.gz
 ```
 
 Stop any existing fff-gpui daemon before testing so requests do not go to the
-installed version: run `fff-gpui server uninstall`. To test the
-[Unix socket integration](#unix-socket-integrations), run `./fff-gpui server run`
-to start the test daemon, then send the documented requests. Quit the test daemon and run `fff-gpui server install` with your installed binary when
+installed version: run `fff-gpui daemon uninstall`. To test the
+[Unix socket integration](#unix-socket-integrations), run `./fff-gpui daemon run`
+to start the test daemon, then send the documented requests. Quit the test daemon and run `fff-gpui daemon install` with your installed binary when
 finished.
 
 These builds are ad-hoc signed, but not notarized. If macOS blocks the binary,
@@ -158,7 +158,7 @@ fff-gpui [PATH]               # pick files (same as `fff-gpui files [PATH]`)
 fff-gpui grep [PATH] [QUERY]  # search file contents
 fff-gpui stdout [grep] [PATH] # print the picks instead of opening them
 fff-gpui config [check|reload]
-fff-gpui server run|install|uninstall|start|stop|restart|status|logs
+fff-gpui daemon run|install|uninstall|start|stop|restart|status|logs
 ```
 
 Append `help` to any command for its help, such as `fff-gpui grep help`.
@@ -172,8 +172,8 @@ the editor. Set `FFF_GPUI_DEBUG=1` to also print logs to stderr.
 
 The picker commands use the background daemon when it runs, which keeps
 directories indexed and handles the global keybind. Without it, they show the
-picker in their own process. `fff-gpui server start` starts the daemon, and
-`fff-gpui server install` has launchd start it at login and again on the next
+picker in their own process. `fff-gpui daemon start` starts the daemon, and
+`fff-gpui daemon install` has launchd start it at login and again on the next
 request after it quits.
 
 The daemon has a memory footprint of ~150mb idle and ~400mb when actively searching. Most of the reported usage in tools like btop is macOS page reservation and will be reclaimed under memory pressure. Report issues if you experience sustained growth beyond these baselines.
@@ -182,7 +182,7 @@ The daemon has a memory footprint of ~150mb idle and ~400mb when actively search
 
 Set `idle_exit_secs` (minimum 10, off by default) to have the daemon exit once no
 picker window has been open and no request has arrived for that long. It is read
-when the daemon starts. With `fff-gpui server install`, launchd starts it again on the
+when the daemon starts. With `fff-gpui daemon install`, launchd starts it again on the
 next socket request.
 
 `global_keybind` only works while the daemon runs; to start it from a shortcut,

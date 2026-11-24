@@ -56,7 +56,7 @@ enum Command {
     Config(ConfigArgs),
     /// Manage the background daemon and its launchd service
     #[command(subcommand)]
-    Server(ServerCommand),
+    Daemon(DaemonCommand),
     /// Print the version
     Version,
 }
@@ -109,7 +109,7 @@ enum ConfigCommand {
 }
 
 #[derive(Subcommand)]
-enum ServerCommand {
+enum DaemonCommand {
     /// Run the daemon in the foreground; the launchd service runs this
     Run,
     /// Install a LaunchAgent that starts the daemon at login and on demand
@@ -265,7 +265,7 @@ pub fn launch_from_cli(cli: Cli) -> anyhow::Result<Option<Launch>> {
             run_config_command(args.command)?;
             return Ok(None);
         }
-        Some(Command::Server(command)) => return run_server_command(command),
+        Some(Command::Daemon(command)) => return run_daemon_command(command),
         Some(Command::Version) => {
             println!("fff-gpui {}", env!("CARGO_PKG_VERSION"));
             return Ok(None);
@@ -324,7 +324,7 @@ fn run_config_command(command: Option<ConfigCommand>) -> anyhow::Result<()> {
                 );
             if reloaded {
                 println!(
-                    "reloaded {}; idle_exit_secs changes apply after `fff-gpui server restart`",
+                    "reloaded {}; idle_exit_secs changes apply after `fff-gpui daemon restart`",
                     path.display()
                 );
             } else {
@@ -338,15 +338,15 @@ fn run_config_command(command: Option<ConfigCommand>) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn run_server_command(command: ServerCommand) -> anyhow::Result<Option<Launch>> {
+fn run_daemon_command(command: DaemonCommand) -> anyhow::Result<Option<Launch>> {
     match command {
-        ServerCommand::Run => return Ok(Some(Launch::Daemon)),
-        ServerCommand::Logs(args) => match args.follow {
+        DaemonCommand::Run => return Ok(Some(Launch::Daemon)),
+        DaemonCommand::Logs(args) => match args.follow {
             Some(LogsCommand::Follow { lines }) => log::show_log(lines, true)?,
             None => log::show_log(args.lines, false)?,
         },
         #[cfg(target_os = "macos")]
-        ServerCommand::Install => {
+        DaemonCommand::Install => {
             let path = service::install_launch_agent()?;
             println!(
                 "installed {}; fff-gpui now starts at login and on demand",
@@ -354,17 +354,17 @@ fn run_server_command(command: ServerCommand) -> anyhow::Result<Option<Launch>> 
             );
         }
         #[cfg(target_os = "macos")]
-        ServerCommand::Uninstall => {
+        DaemonCommand::Uninstall => {
             service::uninstall_launch_agent()?;
             println!("removed the fff-gpui LaunchAgent");
         }
         #[cfg(target_os = "macos")]
-        ServerCommand::Start => {
+        DaemonCommand::Start => {
             service::start_service()?;
             println!("fff-gpui is running");
         }
         #[cfg(target_os = "macos")]
-        ServerCommand::Stop => {
+        DaemonCommand::Stop => {
             if service::stop_service()? {
                 println!("stopped fff-gpui");
             } else {
@@ -372,12 +372,12 @@ fn run_server_command(command: ServerCommand) -> anyhow::Result<Option<Launch>> 
             }
         }
         #[cfg(target_os = "macos")]
-        ServerCommand::Restart => {
+        DaemonCommand::Restart => {
             service::restart_service()?;
             println!("restarted fff-gpui");
         }
         #[cfg(target_os = "macos")]
-        ServerCommand::Status => print!("{}", service::service_status()?),
+        DaemonCommand::Status => print!("{}", service::service_status()?),
         #[cfg(not(target_os = "macos"))]
         _ => anyhow::bail!("this command manages a launchd service and only works on macOS"),
     }

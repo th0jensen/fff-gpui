@@ -452,7 +452,7 @@ pub fn launchd_job_waiting() -> Result<bool> {
 }
 
 /// Start the daemon: through launchd when the LaunchAgent is installed, otherwise as a
-/// detached `fff-gpui server run`.
+/// detached `fff-gpui daemon run`.
 #[cfg(target_os = "macos")]
 pub fn start_service() -> Result<()> {
     use std::os::unix::process::CommandExt;
@@ -469,7 +469,7 @@ pub fn start_service() -> Result<()> {
     }
     let exe = std::env::current_exe().context("failed to locate the fff-gpui binary")?;
     std::process::Command::new(exe)
-        .args(["server", "run"])
+        .args(["daemon", "run"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -482,7 +482,7 @@ pub fn start_service() -> Result<()> {
         }
         thread::sleep(Duration::from_millis(100));
     }
-    anyhow::bail!("the daemon did not start; see `fff-gpui server logs`")
+    anyhow::bail!("the daemon did not start; see `fff-gpui daemon logs`")
 }
 
 /// Ask the running daemon to quit and wait for it; returns false when nothing was running.
@@ -529,8 +529,8 @@ pub fn restart_service() -> Result<()> {
 pub fn service_status() -> Result<String> {
     let state = job_state()?;
     let service = match (launch_agent_path().exists(), &state) {
-        (false, _) => "no LaunchAgent (`fff-gpui server install` starts it at login)",
-        (true, JobState::NotLoaded) => "installed, not loaded (run `fff-gpui server start`)",
+        (false, _) => "no LaunchAgent (`fff-gpui daemon install` starts it at login)",
+        (true, JobState::NotLoaded) => "installed, not loaded (run `fff-gpui daemon start`)",
         (true, _) => "installed",
     };
     let daemon = match state {
@@ -587,7 +587,7 @@ fn launch_agent_plist(label: &str, program: &str, socket: &str, log: &str) -> St
           <key>ProgramArguments</key>
           <array>
             <string>{program}</string>
-            <string>server</string>
+            <string>daemon</string>
             <string>run</string>
           </array>
           <key>RunAtLoad</key>
