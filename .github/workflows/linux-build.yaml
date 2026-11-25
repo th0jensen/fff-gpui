@@ -1,0 +1,49 @@
+name: Linux Build
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Clippy, test and build (x86_64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake clang pkg-config libxkbcommon-dev \
+            libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libxcb1-dev \
+            libfontconfig-dev libfreetype-dev libvulkan-dev libssl-dev libzstd-dev
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.event_name != 'pull_request' }}
+      # --locked keeps libc at 0.2.189: xattr 0.2.3 (via gpui) does not build against newer libc on Linux.
+      - name: Run Clippy
+        run: cargo clippy --locked -- -D clippy::unwrap_used -D clippy::panic -D clippy::dbg_macro -D unused_must_use
+      - name: Test
+        run: cargo test --locked
+      - name: Build release binary
+        run: cargo build --locked --release

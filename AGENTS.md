@@ -43,4 +43,4 @@ cargo clippy -- -D clippy::unwrap_used -D clippy::panic -D clippy::dbg_macro -D 
 
 # CI
 
-Pull requests run `.github/workflows/macos-test-build.yaml`. Releases are triggered by `v*` tags via `.github/workflows/release-macos.yaml`.
+Pull requests run `.github/workflows/macos-test-build.yaml` and `.github/workflows/linux-build.yaml`. Releases are triggered by `v*` tags via `.github/workflows/release-macos.yaml`.

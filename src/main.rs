@@ -63,6 +63,21 @@ enum MiOption {
 
 unsafe extern "C" {
     fn mi_option_set(option: MiOption, value: std::os::raw::c_long);
+    fn mi_collect(force: bool);
+}
+
+// Return memory freed with the last picker window to the OS. Searches run on short-lived
+// threads, and mimalloc keeps their abandoned pages until the main thread forces a collect.
+// C libraries such as the Vulkan driver free into glibc's heap, which only shrinks on a trim.
+fn release_freed_memory() {
+    unsafe { mi_collect(true) };
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    {
+        unsafe extern "C" {
+            fn malloc_trim(pad: usize) -> std::os::raw::c_int;
+        }
+        unsafe { malloc_trim(0) };
+    }
 }
 
 fn configure_allocator_for_low_rss() {
@@ -206,8 +221,8 @@ fn bind_base_keys(cx: &mut App) {
         KeyBinding::new("ctrl-up", CyclePreviousQuery, None),
         KeyBinding::new("ctrl-u", PreviewScrollUp, None),
         KeyBinding::new("ctrl-d", PreviewScrollDown, None),
-        KeyBinding::new("cmd-f", SwitchFiles, None),
-        KeyBinding::new("cmd-g", SwitchGrep, None),
+        KeyBinding::new("secondary-f", SwitchFiles, None),
+        KeyBinding::new("secondary-g", SwitchGrep, None),
         KeyBinding::new("backspace", FieldBackspace, None),
         KeyBinding::new("delete", FieldDelete, None),
         KeyBinding::new("left", FieldLeft, None),
@@ -215,9 +230,9 @@ fn bind_base_keys(cx: &mut App) {
         KeyBinding::new("shift-left", FieldSelectLeft, None),
         KeyBinding::new("shift-right", FieldSelectRight, None),
         KeyBinding::new("cmd-a", FieldSelectAll, None),
-        KeyBinding::new("cmd-v", FieldPaste, None),
-        KeyBinding::new("cmd-c", FieldCopy, None),
-        KeyBinding::new("cmd-x", FieldCut, None),
+        KeyBinding::new("secondary-v", FieldPaste, None),
+        KeyBinding::new("secondary-c", FieldCopy, None),
+        KeyBinding::new("secondary-x", FieldCut, None),
         KeyBinding::new("home", FieldHome, None),
         KeyBinding::new("end", FieldEnd, None),
     ]);
@@ -428,7 +443,15 @@ fn open_window(
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar: None,
             is_resizable: false,
-            kind: WindowKind::PopUp,
+            // On X11, GPUI marks pop-ups as notifications, which window managers may not focus.
+            kind: if cfg!(target_os = "linux") {
+                WindowKind::Normal
+            } else {
+                WindowKind::PopUp
+            },
+            // Linux draws its own frame instead of the WM title bar. GPUI falls back to the WM
+            // frame where client decorations are unsupported, such as X11 without a compositor.
+            window_decorations: cfg!(target_os = "linux").then_some(WindowDecorations::Client),
             ..WindowOptions::default()
         },
         |window, cx| {
@@ -857,7 +880,23 @@ fn main() {
             let last_activity = Rc::new(Cell::new(Instant::now()));
             cx.on_window_closed({
                 let last_activity = last_activity.clone();
-                move |_| last_activity.set(Instant::now())
+                move |cx| {
+                    last_activity.set(Instant::now());
+                    if !cx.windows().is_empty() {
+                        return;
+                    }
+                    // Wait for the picker and its in-flight searches to drop what they hold.
+                    cx.spawn(async move |cx: &mut AsyncApp| {
+                        cx.background_executor().timer(Duration::from_secs(1)).await;
+                        let _ = cx.update(|cx| {
+                            if cx.windows().is_empty() {
+                                release_freed_memory();
+                                debug!("released memory after the last picker window closed");
+                            }
+                        });
+                    })
+                    .detach();
+                }
             })
             .detach();
             if let Some(timeout) = idle_timeout {
