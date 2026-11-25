@@ -553,15 +553,26 @@ impl FffPicker {
 
     // Close the popup when the window loses focus, matching Raycast-style dismissal.
     pub fn install_focus_lost_dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.dismiss_on_window_blur =
-            Some(cx.observe_window_activation(window, |_this, window, _cx| {
-                if !window.is_window_active() {
+        // X11 can report a focus-out before the window was ever focused; only a window that
+        // had focus can lose it.
+        let mut was_active = window.is_window_active();
+        self.dismiss_on_window_blur = Some(cx.observe_window_activation(
+            window,
+            move |_this, window, _cx| {
+                let active = window.is_window_active();
+                debug!(active, was_active, "picker window activation changed");
+                if active {
+                    was_active = true;
+                } else if was_active {
+                    debug!("dismissing picker: window deactivated");
                     window.remove_window();
                 }
-            }));
+            },
+        ));
         self.dismiss_on_blur =
             Some(
                 cx.on_blur(&self.focus_handle, window, |_this, window, _cx| {
+                    debug!("dismissing picker: focus left the picker");
                     window.remove_window();
                 }),
             );
@@ -1401,7 +1412,7 @@ impl FffPicker {
 
 impl Render for FffPicker {
     // Render the picker layout.
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let current_theme_version = theme::version();
         if self.theme_version != current_theme_version {
             self.theme_version = current_theme_version;
@@ -1475,9 +1486,15 @@ impl Render for FffPicker {
                 results.len()
             )
         };
-        let mode_hint = match self.view {
-            SearchView::Files => "cmd-g grep",
-            SearchView::Grep => "cmd-f files",
+        let draws_own_frame = matches!(
+            window.window_decorations(),
+            Decorations::Client { tiling } if !tiling.is_tiled()
+        );
+        let mode_hint = match (self.view, cfg!(target_os = "macos")) {
+            (SearchView::Files, true) => "cmd-g grep",
+            (SearchView::Files, false) => "ctrl-g grep",
+            (SearchView::Grep, true) => "cmd-f files",
+            (SearchView::Grep, false) => "ctrl-f files",
         };
         if self.view == SearchView::Grep {
             let mode = match self.grep_mode {
@@ -1510,6 +1527,11 @@ impl Render for FffPicker {
             .flex()
             .flex_col()
             .bg(rgb(theme.bg))
+            // Square corners: GPUI clips children to rectangles, so rows and the preview would
+            // paint over rounded ones.
+            .when(draws_own_frame, |this| {
+                this.border_1().border_color(rgb(theme.border))
+            })
             .text_color(rgb(theme.text_primary))
             .text_size(ui_font_size)
             .when_some(ui_font_family.clone(), |this, family| this.font_family(family))
