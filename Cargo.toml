@@ -37,7 +37,6 @@ tree-sitter-swift = "0.7.1"
 tree-sitter-typescript = "0.23.2"
 tree-sitter-yaml = "0.7.2"
 mimalloc = "0.1"
-objc = "0.2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 clap = { version = "4", features = ["derive"] }
@@ -45,6 +44,7 @@ indoc = "2.0.7"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.26"
+objc = "0.2"
 
 [lints.clippy]
 unwrap_used = "deny"

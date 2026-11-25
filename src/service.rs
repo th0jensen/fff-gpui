@@ -5,7 +5,6 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use async_channel::Sender;
-use indoc::formatdoc;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, instrument, warn};
 
@@ -569,14 +568,16 @@ fn service_program() -> Result<PathBuf> {
     Ok(exe)
 }
 
+#[cfg(target_os = "macos")]
 fn xml_escape(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
 }
 
+#[cfg(target_os = "macos")]
 fn launch_agent_plist(label: &str, program: &str, socket: &str, log: &str) -> String {
-    formatdoc!(
+    indoc::formatdoc!(
         r#"
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -844,6 +845,7 @@ mod tests {
         assert!(back.paths[1].line.is_none());
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn launch_agent_plist_escapes_paths() {
         let plist = launch_agent_plist("label", "/Apps/A&B <x>/fff-gpui", "/sock", "/log");
