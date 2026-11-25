@@ -63,6 +63,21 @@ enum MiOption {
 
 unsafe extern "C" {
     fn mi_option_set(option: MiOption, value: std::os::raw::c_long);
+    fn mi_collect(force: bool);
+}
+
+// Return memory freed with the last picker window to the OS. Searches run on short-lived
+// threads, and mimalloc keeps their abandoned pages until the main thread forces a collect.
+// C libraries such as the Vulkan driver free into glibc's heap, which only shrinks on a trim.
+fn release_freed_memory() {
+    unsafe { mi_collect(true) };
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    {
+        unsafe extern "C" {
+            fn malloc_trim(pad: usize) -> std::os::raw::c_int;
+        }
+        unsafe { malloc_trim(0) };
+    }
 }
 
 fn configure_allocator_for_low_rss() {
@@ -865,7 +880,23 @@ fn main() {
             let last_activity = Rc::new(Cell::new(Instant::now()));
             cx.on_window_closed({
                 let last_activity = last_activity.clone();
-                move |_| last_activity.set(Instant::now())
+                move |cx| {
+                    last_activity.set(Instant::now());
+                    if !cx.windows().is_empty() {
+                        return;
+                    }
+                    // Wait for the picker and its in-flight searches to drop what they hold.
+                    cx.spawn(async move |cx: &mut AsyncApp| {
+                        cx.background_executor().timer(Duration::from_secs(1)).await;
+                        let _ = cx.update(|cx| {
+                            if cx.windows().is_empty() {
+                                release_freed_memory();
+                                debug!("released memory after the last picker window closed");
+                            }
+                        });
+                    })
+                    .detach();
+                }
             })
             .detach();
             if let Some(timeout) = idle_timeout {
