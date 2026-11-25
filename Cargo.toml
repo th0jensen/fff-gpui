@@ -56,3 +56,8 @@ unused_must_use = "deny"
 
 [profile.dev]
 opt-level = 1
+
+# gpui 0.2.2 with the Linux backends no longer quitting when the last window closes, so the
+# daemon survives each pick. Drop this once a crates.io gpui ships `with_quit_mode`.
+[patch.crates-io]
+gpui = { path = "vendor/gpui" }
