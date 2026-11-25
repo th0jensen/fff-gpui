@@ -1,9 +1,7 @@
 use std::path::Path;
+use std::process::Command;
 
 use crate::theme;
-
-use tree_sitter::Language;
-use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
 
 pub const MAX_PREVIEW_LINES: usize = 500;
 pub const MATCH_CONTEXT_BEFORE: usize = 8;
@@ -24,155 +22,41 @@ pub struct HighlightedLine {
     pub spans: Vec<HighlightedSpan>,
 }
 
-struct TreeSitterLanguageSpec {
-    language: Language,
-    name: &'static str,
-    highlights_query: &'static str,
-    injections_query: &'static str,
-    locals_query: &'static str,
-}
-
-fn syntax_set_for_path(path: &Path) -> Option<TreeSitterLanguageSpec> {
-    let extension = path.extension()?.to_string_lossy().to_ascii_lowercase();
-
-    match extension.as_str() {
-        "rs" => Some(TreeSitterLanguageSpec {
-            language: tree_sitter_rust::LANGUAGE.into(),
-            name: "rust",
-            highlights_query: tree_sitter_rust::HIGHLIGHTS_QUERY,
-            injections_query: tree_sitter_rust::INJECTIONS_QUERY,
-            locals_query: "",
-        }),
-        "swift" => Some(TreeSitterLanguageSpec {
-            language: tree_sitter_swift::LANGUAGE.into(),
-            name: "swift",
-            highlights_query: tree_sitter_swift::HIGHLIGHTS_QUERY,
-            injections_query: tree_sitter_swift::INJECTIONS_QUERY,
-            locals_query: tree_sitter_swift::LOCALS_QUERY,
-        }),
-        "js" | "mjs" | "cjs" | "jsx" => Some(TreeSitterLanguageSpec {
-            language: tree_sitter_javascript::LANGUAGE.into(),
-            name: "javascript",
-            highlights_query: if extension == "jsx" {
-                tree_sitter_javascript::JSX_HIGHLIGHT_QUERY
-            } else {
-                tree_sitter_javascript::HIGHLIGHT_QUERY
-            },
-            injections_query: tree_sitter_javascript::INJECTIONS_QUERY,
-            locals_query: tree_sitter_javascript::LOCALS_QUERY,
-        }),
-        "ts" => Some(TreeSitterLanguageSpec {
-            language: tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-            name: "typescript",
-            highlights_query: tree_sitter_typescript::HIGHLIGHTS_QUERY,
-            injections_query: "",
-            locals_query: tree_sitter_typescript::LOCALS_QUERY,
-        }),
-        "tsx" => Some(TreeSitterLanguageSpec {
-            language: tree_sitter_typescript::LANGUAGE_TSX.into(),
-            name: "tsx",
-            highlights_query: tree_sitter_typescript::HIGHLIGHTS_QUERY,
-            injections_query: "",
-            locals_query: tree_sitter_typescript::LOCALS_QUERY,
-        }),
-        "go" => Some(TreeSitterLanguageSpec {
-            language: tree_sitter_go::LANGUAGE.into(),
-            name: "go",
-            highlights_query: tree_sitter_go::HIGHLIGHTS_QUERY,
-            injections_query: "",
-            locals_query: "",
-        }),
-        "py" => Some(TreeSitterLanguageSpec {
-            language: tree_sitter_python::LANGUAGE.into(),
-            name: "python",
-            highlights_query: tree_sitter_python::HIGHLIGHTS_QUERY,
-            injections_query: "",
-            locals_query: "",
-        }),
-        "json" | "jsonc" => Some(TreeSitterLanguageSpec {
-            language: tree_sitter_json::LANGUAGE.into(),
-            name: "json",
-            highlights_query: tree_sitter_json::HIGHLIGHTS_QUERY,
-            injections_query: "",
-            locals_query: "",
-        }),
-        "yaml" | "yml" => Some(TreeSitterLanguageSpec {
-            language: tree_sitter_yaml::LANGUAGE.into(),
-            name: "yaml",
-            highlights_query: tree_sitter_yaml::HIGHLIGHTS_QUERY,
-            injections_query: "",
-            locals_query: "",
-        }),
-        "sh" | "bash" | "zsh" => Some(TreeSitterLanguageSpec {
-            language: tree_sitter_bash::LANGUAGE.into(),
-            name: "bash",
-            highlights_query: tree_sitter_bash::HIGHLIGHT_QUERY,
-            injections_query: "",
-            locals_query: "",
-        }),
-        "c" | "h" => Some(TreeSitterLanguageSpec {
-            language: tree_sitter_c::LANGUAGE.into(),
-            name: "c",
-            highlights_query: tree_sitter_c::HIGHLIGHT_QUERY,
-            injections_query: "",
-            locals_query: "",
-        }),
-        "cc" | "cpp" | "cxx" | "hpp" | "hh" | "hxx" => Some(TreeSitterLanguageSpec {
-            language: tree_sitter_cpp::LANGUAGE.into(),
-            name: "cpp",
-            highlights_query: tree_sitter_cpp::HIGHLIGHT_QUERY,
-            injections_query: "",
-            locals_query: "",
-        }),
-        "css" => Some(TreeSitterLanguageSpec {
-            language: tree_sitter_css::LANGUAGE.into(),
-            name: "css",
-            highlights_query: tree_sitter_css::HIGHLIGHTS_QUERY,
-            injections_query: "",
-            locals_query: "",
-        }),
-        "html" | "htm" => Some(TreeSitterLanguageSpec {
-            language: tree_sitter_html::LANGUAGE.into(),
-            name: "html",
-            highlights_query: tree_sitter_html::HIGHLIGHTS_QUERY,
-            injections_query: tree_sitter_html::INJECTIONS_QUERY,
-            locals_query: "",
-        }),
-        "md" | "markdown" => Some(TreeSitterLanguageSpec {
-            language: tree_sitter_md::LANGUAGE.into(),
-            name: "markdown",
-            highlights_query: tree_sitter_md::HIGHLIGHT_QUERY_BLOCK,
-            injections_query: tree_sitter_md::INJECTION_QUERY_BLOCK,
-            locals_query: "",
-        }),
-        "regex" | "re" => Some(TreeSitterLanguageSpec {
-            language: tree_sitter_regex::LANGUAGE.into(),
-            name: "regex",
-            highlights_query: tree_sitter_regex::HIGHLIGHTS_QUERY,
-            injections_query: "",
-            locals_query: "",
-        }),
-        _ => None,
+fn ansi_color_16(index: u8) -> u32 {
+    match index {
+        0 => 0x000000,
+        1 => 0xcd3131,
+        2 => 0x0dbc79,
+        3 => 0xe5e510,
+        4 => 0x2472c8,
+        5 => 0xbc3fbc,
+        6 => 0x11a8cd,
+        7 => 0xe5e5e5,
+        8 => 0x666666,
+        9 => 0xf14c4c,
+        10 => 0x23d18b,
+        11 => 0xf5f543,
+        12 => 0x3b8eea,
+        13 => 0xd670d6,
+        14 => 0x29b8db,
+        _ => 0xffffff,
     }
 }
 
-fn build_highlight_config(spec: &TreeSitterLanguageSpec) -> Option<HighlightConfiguration> {
-    let mut config = HighlightConfiguration::new(
-        spec.language.clone(),
-        spec.name,
-        spec.highlights_query,
-        spec.injections_query,
-        spec.locals_query,
-    )
-    .ok()?;
-    let capture_names: Vec<String> = config
-        .query
-        .capture_names()
-        .into_iter()
-        .map(|name| name.to_string())
-        .collect();
-    config.configure(&capture_names);
-    Some(config)
+fn color_256(index: u8) -> u32 {
+    if index < 16 {
+        return ansi_color_16(index);
+    }
+    if index >= 232 {
+        let level = 8 + (index - 232) as u32 * 10;
+        return (level << 16) | (level << 8) | level;
+    }
+    let index = index - 16;
+    let r = index / 36;
+    let g = (index / 6) % 6;
+    let b = index % 6;
+    let to_level = |v: u8| if v == 0 { 0 } else { 55 + v as u32 * 40 };
+    (to_level(r) << 16) | (to_level(g) << 8) | to_level(b)
 }
 
 fn append_span(
@@ -210,79 +94,6 @@ fn append_span(
     });
 }
 
-fn push_text(lines: &mut Vec<HighlightedLine>, mut text: &str, style: theme::SyntaxRenderStyle) {
-    while !text.is_empty() {
-        let newline = text.find('\n');
-        match newline {
-            Some(idx) => {
-                let (head, tail) = text.split_at(idx);
-                let head = head.strip_suffix('\r').unwrap_or(head);
-                append_span(
-                    lines.last_mut().expect("at least one line exists"),
-                    style.color,
-                    style.italic,
-                    style.bold,
-                    style.underline,
-                    style.strikethrough,
-                    head,
-                );
-                lines.push(HighlightedLine { spans: Vec::new() });
-                text = &tail[1..];
-            }
-            None => {
-                let text = text.strip_suffix('\r').unwrap_or(text);
-                append_span(
-                    lines.last_mut().expect("at least one line exists"),
-                    style.color,
-                    style.italic,
-                    style.bold,
-                    style.underline,
-                    style.strikethrough,
-                    text,
-                );
-                return;
-            }
-        }
-    }
-}
-
-fn highlighted_lines(content: &str, spec: &TreeSitterLanguageSpec) -> Option<Vec<HighlightedLine>> {
-    if content.is_empty() {
-        return Some(Vec::new());
-    }
-
-    let mut highlighter = Highlighter::new();
-    let config = build_highlight_config(spec)?;
-    let capture_names = config.query.capture_names();
-    let mut lines = vec![HighlightedLine { spans: Vec::new() }];
-    let default_style = theme::syntax_render_style("text");
-    let mut style_stack = vec![default_style];
-
-    let events = highlighter
-        .highlight(&config, content.as_bytes(), None, |_| None)
-        .ok()?;
-
-    for event in events {
-        match event.ok()? {
-            HighlightEvent::Source { start, end } => {
-                let style = style_stack.last().copied().unwrap_or(default_style);
-                push_text(&mut lines, &content[start..end], style);
-            }
-            HighlightEvent::HighlightStart(highlight) => {
-                let capture_name = capture_names.get(highlight.0).copied().unwrap_or("text");
-                style_stack.push(theme::syntax_render_style(capture_name));
-            }
-            HighlightEvent::HighlightEnd => {
-                if style_stack.len() > 1 {
-                    style_stack.pop();
-                }
-            }
-        }
-    }
-
-    Some(lines)
-}
-
 fn plain_text_lines(content: &str) -> Vec<HighlightedLine> {
     let mut lines = Vec::new();
     let mut current = HighlightedLine { spans: Vec::new() };
@@ -313,6 +124,194 @@ fn plain_text_lines(content: &str) -> Vec<HighlightedLine> {
     lines
 }
 
+fn apply_sgr(
+    seq: &str,
+    color: &mut u32,
+    italic: &mut bool,
+    bold: &mut bool,
+    underline: &mut bool,
+    strikethrough: &mut bool,
+    default_color: u32,
+    default_italic: bool,
+    default_bold: bool,
+    default_underline: bool,
+    default_strikethrough: bool,
+) {
+    if seq.is_empty() {
+        *color = default_color;
+        *italic = default_italic;
+        *bold = default_bold;
+        *underline = default_underline;
+        *strikethrough = default_strikethrough;
+        return;
+    }
+    let params: Vec<&str> = seq.split(';').collect();
+    let mut i = 0;
+    while i < params.len() {
+        let code: u8 = params[i].parse().unwrap_or(0);
+        match code {
+            0 => {
+                *color = default_color;
+                *italic = default_italic;
+                *bold = default_bold;
+                *underline = default_underline;
+                *strikethrough = default_strikethrough;
+            }
+            1 => *bold = true,
+            3 => *italic = true,
+            4 => *underline = true,
+            9 => *strikethrough = true,
+            22 => *bold = false,
+            23 => *italic = false,
+            24 => *underline = false,
+            29 => *strikethrough = false,
+            30..=37 => *color = ansi_color_16(code - 30),
+            38 => {
+                if params.get(i + 1) == Some(&"2") && i + 4 < params.len() {
+                    let r: u8 = params[i + 2].parse().unwrap_or(0);
+                    let g: u8 = params[i + 3].parse().unwrap_or(0);
+                    let b: u8 = params[i + 4].parse().unwrap_or(0);
+                    *color = (r as u32) << 16 | (g as u32) << 8 | b as u32;
+                    i += 4;
+                } else if params.get(i + 1) == Some(&"5") && i + 2 < params.len() {
+                    let idx: u8 = params[i + 2].parse().unwrap_or(0);
+                    *color = color_256(idx);
+                    i += 2;
+                }
+            }
+            39 => *color = default_color,
+            90..=97 => *color = ansi_color_16(code - 90 + 8),
+            _ => {}
+        }
+        i += 1;
+    }
+}
+
+fn ansi_highlighted_lines(input: &str) -> Vec<HighlightedLine> {
+    if input.is_empty() {
+        return Vec::new();
+    }
+
+    let default_style = theme::syntax_render_style("text");
+    let mut color = default_style.color;
+    let mut italic = default_style.italic;
+    let mut bold = default_style.bold;
+    let mut underline = default_style.underline;
+    let mut strikethrough = default_style.strikethrough;
+
+    let mut lines: Vec<HighlightedLine> = Vec::new();
+    let mut current = HighlightedLine { spans: Vec::new() };
+    let mut buf = String::new();
+
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' {
+            if !buf.is_empty() {
+                append_span(
+                    &mut current,
+                    color,
+                    italic,
+                    bold,
+                    underline,
+                    strikethrough,
+                    &buf,
+                );
+                buf.clear();
+            }
+            if chars.next() == Some('[') {
+                let mut seq = String::new();
+                for c in chars.by_ref() {
+                    if c == 'm' {
+                        break;
+                    }
+                    if c.is_ascii_digit() || c == ';' {
+                        seq.push(c);
+                    } else {
+                        // Unknown CSI; stop parsing.
+                        break;
+                    }
+                }
+                apply_sgr(
+                    &seq,
+                    &mut color,
+                    &mut italic,
+                    &mut bold,
+                    &mut underline,
+                    &mut strikethrough,
+                    default_style.color,
+                    default_style.italic,
+                    default_style.bold,
+                    default_style.underline,
+                    default_style.strikethrough,
+                );
+            }
+        } else if ch == '\n' {
+            if !buf.is_empty() {
+                append_span(
+                    &mut current,
+                    color,
+                    italic,
+                    bold,
+                    underline,
+                    strikethrough,
+                    &buf,
+                );
+                buf.clear();
+            }
+            lines.push(current);
+            current = HighlightedLine { spans: Vec::new() };
+        } else if ch == '\r' {
+            // Ignore carriage returns.
+        } else {
+            buf.push(ch);
+        }
+    }
+
+    if !buf.is_empty() {
+        append_span(
+            &mut current,
+            color,
+            italic,
+            bold,
+            underline,
+            strikethrough,
+            &buf,
+        );
+        buf.clear();
+    }
+    if !current.spans.is_empty() || !lines.is_empty() {
+        lines.push(current);
+    }
+
+    lines
+}
+
+fn run_bat(path: &Path) -> Option<String> {
+    let output = Command::new("bat")
+        .arg("--color=always")
+        .arg("--plain")
+        .arg("--paging=never")
+        .arg("--wrap=never")
+        .arg(path)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout).ok()
+}
+
+fn syntax_lines_for_path(path: &Path, content: &str) -> Vec<HighlightedLine> {
+    if content.is_empty() {
+        return Vec::new();
+    }
+
+    match run_bat(path) {
+        Some(output) => ansi_highlighted_lines(&output),
+        None => plain_text_lines(content),
+    }
+}
+
 fn slice_preview_lines(
     lines: Vec<HighlightedLine>,
     start_line: usize,
@@ -324,18 +323,6 @@ fn slice_preview_lines(
         .take(MAX_PREVIEW_LINES)
         .collect();
     (start_line, preview)
-}
-
-fn syntax_lines_for_path(path: &Path, content: &str) -> Vec<HighlightedLine> {
-    if content.is_empty() {
-        return Vec::new();
-    }
-
-    let Some(spec) = syntax_set_for_path(path) else {
-        return plain_text_lines(content);
-    };
-
-    highlighted_lines(content, &spec).unwrap_or_else(|| plain_text_lines(content))
 }
 
 // Warm the syntax and theme caches before the first preview render.
@@ -440,7 +427,6 @@ fn clamp_range_to_char_boundaries(text: &str, start: usize, end: usize) -> Optio
     (start < end).then_some((start, end))
 }
 
-// Read a file and return a syntax-highlighted preview window.
 pub fn highlight_file_window(
     path: &Path,
     center_line: Option<usize>,
@@ -463,18 +449,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tree_sitter_capture_name_aliases_resolve_to_zed_tokens() {
-        assert_eq!(
-            theme::syntax_color("comment.documentation"),
-            theme::syntax_color("comment")
-        );
-    }
-
-    #[test]
-    fn tree_sitter_highlight_map_detects_typescript_files() {
-        let spec =
-            syntax_set_for_path(Path::new("component.ts")).expect("typescript should be supported");
-
-        assert_eq!(spec.name, "typescript");
+    fn clamp_range_handles_unicode() {
+        assert!(clamp_range_to_char_boundaries("é", 1, 2).is_some());
     }
 }
